@@ -745,8 +745,8 @@ suppressPackageStartupMessages({
   library(vegan)
 })
 
-source(file.path("..", "simulate_compositional_bb.R"))
-source(file.path("..", "utils_proportion_transform.R"))
+source("simulate_compositional_bb.R")
+source("utils_proportion_transform.R")
 
 utils::globalVariables(c(
   "parameter", "c_effect", "c_lower", "c_upper", "v_effect",
