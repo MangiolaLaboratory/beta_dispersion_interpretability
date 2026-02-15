@@ -390,6 +390,56 @@ plot_betadisper_pcoa_and_boxplot <- function(
   list(pcoa = p_pcoa, box = p_box)
 }
 
+# Express centroid separation as a percentage of average group hull radius (PCoA 1-2).
+# 100% means a centroid shift equal to the average hull radius.
+compute_centroid_distance_pct_hull_radius <- function(bd) {
+  sites <- as.data.frame(vegan::scores(bd, display = "sites"))
+  if (ncol(sites) < 2) {
+    return(list(
+      centroid_dist_pcoa12 = NA_real_,
+      mean_hull_radius = NA_real_,
+      pct_of_mean_hull_radius = NA_real_
+    ))
+  }
+  colnames(sites)[1:2] <- c("Axis1", "Axis2")
+  sites$group <- bd$group
+
+  centroids <- as.data.frame(vegan::scores(bd, display = "centroids"))
+  if (nrow(centroids) != 2 || ncol(centroids) < 2) {
+    return(list(
+      centroid_dist_pcoa12 = NA_real_,
+      mean_hull_radius = NA_real_,
+      pct_of_mean_hull_radius = NA_real_
+    ))
+  }
+  colnames(centroids)[1:2] <- c("Axis1", "Axis2")
+  centroid_dist <- sqrt(sum((centroids[1, 1:2] - centroids[2, 1:2])^2))
+
+  hull_radii <- sites %>%
+    dplyr::group_by(group) %>%
+    dplyr::group_map(\(d, ...) {
+      if (nrow(d) < 3) return(NA_real_)
+      cx <- mean(d$Axis1, na.rm = TRUE)
+      cy <- mean(d$Axis2, na.rm = TRUE)
+      radial_dist <- sqrt((d$Axis1 - cx)^2 + (d$Axis2 - cy)^2)
+      max(radial_dist, na.rm = TRUE)
+    }) %>%
+    unlist(use.names = FALSE)
+
+  mean_hull_radius <- mean(hull_radii, na.rm = TRUE)
+  pct <- if (is.finite(mean_hull_radius) && mean_hull_radius > 0) {
+    100 * centroid_dist / mean_hull_radius
+  } else {
+    NA_real_
+  }
+
+  list(
+    centroid_dist_pcoa12 = centroid_dist,
+    mean_hull_radius = mean_hull_radius,
+    pct_of_mean_hull_radius = pct
+  )
+}
+
 # Format analysis results for plotting - takes output from run_analysis_job(return_full = TRUE)
 # This function formats analysis results into structures needed for plotting (stats, betadisper objects, distances)
 format_analysis_results_for_plotting <- function(
@@ -1977,7 +2027,10 @@ list(
           truth = logical(0),
           method = character(0),
           p_value = numeric(0),
-          centroid_dist = numeric(0)
+          centroid_dist = numeric(0),
+          centroid_sep_pcoa12 = numeric(0),
+          mean_hull_radius = numeric(0),
+          centroid_sep_pct_hull_radius = numeric(0)
         ))
       }
 
@@ -2001,6 +2054,34 @@ list(
         group_means <- tapply(dist_df$distance, dist_df$group, mean)
         centroid_distance <- abs(group_means["IBD"] - group_means["non-IBD"])
 
+        # Centroid separation in PCoA 1-2, scaled by average group hull radius.
+        sites <- as.data.frame(vegan::scores(bd, display = "sites"))
+        centroids <- as.data.frame(vegan::scores(bd, display = "centroids"))
+        centroid_sep_pcoa12 <- NA_real_
+        mean_hull_radius <- NA_real_
+        centroid_sep_pct_hull_radius <- NA_real_
+        if (ncol(sites) >= 2 && nrow(centroids) == 2 && ncol(centroids) >= 2) {
+          colnames(sites)[1:2] <- c("Axis1", "Axis2")
+          sites$group <- bd$group
+          colnames(centroids)[1:2] <- c("Axis1", "Axis2")
+
+          centroid_sep_pcoa12 <- sqrt(sum((centroids[1, 1:2] - centroids[2, 1:2])^2))
+          hull_radii <- sites %>%
+            dplyr::group_by(group) %>%
+            dplyr::summarise(
+              hull_radius = {
+                cx <- mean(Axis1, na.rm = TRUE)
+                cy <- mean(Axis2, na.rm = TRUE)
+                max(sqrt((Axis1 - cx)^2 + (Axis2 - cy)^2), na.rm = TRUE)
+              },
+              .groups = "drop"
+            )
+          mean_hull_radius <- mean(hull_radii$hull_radius, na.rm = TRUE)
+          if (is.finite(mean_hull_radius) && mean_hull_radius > 0) {
+            centroid_sep_pct_hull_radius <- 100 * centroid_sep_pcoa12 / mean_hull_radius
+          }
+        }
+
         tibble::tibble(
           seed = seed,
           delta = delta,
@@ -2008,7 +2089,10 @@ list(
           truth = delta > 0,
           method = pretty_method_label_roc(method_key),
           p_value = p,
-          centroid_dist = as.numeric(centroid_distance)
+          centroid_dist = as.numeric(centroid_distance),
+          centroid_sep_pcoa12 = as.numeric(centroid_sep_pcoa12),
+          mean_hull_radius = as.numeric(mean_hull_radius),
+          centroid_sep_pct_hull_radius = as.numeric(centroid_sep_pct_hull_radius)
         )
       })
     },
@@ -3011,6 +3095,7 @@ for (method_key in names(cmp_realistic_taxa_filtered$bd_by_method)) {
   if (nrow(centroids) == 2 && ncol(centroids) >= 2) {
     # Distance in first 2 PCoA dimensions (what's shown in the plot)
     centroid_dist_pcoa12 <- sqrt(sum((centroids[1, 1:2] - centroids[2, 1:2])^2))
+    hull_scale <- compute_centroid_distance_pct_hull_radius(bd_check)
     # Distance in all dimensions
     centroid_dist_all <- sqrt(sum((centroids[1,] - centroids[2,])^2))
     
@@ -3024,6 +3109,10 @@ for (method_key in names(cmp_realistic_taxa_filtered$bd_by_method)) {
     cat("    non-IBD:", paste(round(centroids[1, 1:2], 6), collapse = ", "), "\n")
     cat("    IBD:", paste(round(centroids[2, 1:2], 6), collapse = ", "), "\n")
     cat("  Distance between centroids (PCoA 1-2):", round(centroid_dist_pcoa12, 8), "\n")
+    cat(
+      "  Centroid distance as % of mean hull radius:",
+      round(hull_scale$pct_of_mean_hull_radius, 2), "%\n"
+    )
     cat("  Distance between centroids (all dims):", round(centroid_dist_all, 8), "\n")
     if (!is.null(eig_pct)) {
       cat("  Variance explained (first 5 dims):", paste(paste0(round(eig_pct, 1), "%"), collapse = ", "), "\n")
@@ -3133,14 +3222,14 @@ p_sweep_fnr_realistic_taxa_filtered <- ggplot(fnr_sweep_realistic_taxa_filtered,
   ) +
   theme_multipanel
 
-# Calculate mean centroid distance for each delta, method, and threshold
+# Calculate centroid separation as % of average hull radius for each delta, method, and threshold
 centroid_sweep_realistic_taxa_filtered_raw <- sweep_setting_DO_no_sd_fpr %>%
   dplyr::filter(!grepl("^IBD", method, ignore.case = TRUE)) %>%
   dplyr::group_by(delta, method, threshold) %>%
   dplyr::summarise(
     n_sims = dplyr::n(),
-    mean_centroid_dist = mean(centroid_dist, na.rm = TRUE),
-    se_centroid_dist = sd(centroid_dist, na.rm = TRUE) / sqrt(dplyr::n()),
+    mean_centroid_pct = mean(centroid_sep_pct_hull_radius, na.rm = TRUE),
+    se_centroid_pct = sd(centroid_sep_pct_hull_radius, na.rm = TRUE) / sqrt(dplyr::n()),
     .groups = "drop"
   ) %>%
   dplyr::mutate(
@@ -3158,17 +3247,7 @@ centroid_sweep_realistic_taxa_filtered_raw <- sweep_setting_DO_no_sd_fpr %>%
     )
   )
 
-# Normalize centroid distances within each method and threshold
-baseline_realistic_taxa_filtered <- centroid_sweep_realistic_taxa_filtered_raw %>%
-  dplyr::filter(delta == 0) %>%
-  dplyr::select(method, threshold, baseline_dist = mean_centroid_dist)
-
-centroid_sweep_realistic_taxa_filtered <- centroid_sweep_realistic_taxa_filtered_raw %>%
-  dplyr::left_join(baseline_realistic_taxa_filtered, by = c("method", "threshold")) %>%
-  dplyr::mutate(
-    norm_centroid_dist = mean_centroid_dist / baseline_dist,
-    norm_se = se_centroid_dist / baseline_dist
-  )
+centroid_sweep_realistic_taxa_filtered <- centroid_sweep_realistic_taxa_filtered_raw
 
 # Use consistent colors from roc_colors_all
 sweep_methods_realistic_taxa_filtered <- unique(centroid_sweep_realistic_taxa_filtered$method)
@@ -3179,10 +3258,9 @@ if (any(missing_colors_realistic_taxa_filtered)) {
 }
 names(sweep_colors_realistic_taxa_filtered) <- sweep_methods_realistic_taxa_filtered
 
-p_sweep_realistic_taxa_filtered <- ggplot(centroid_sweep_realistic_taxa_filtered, aes(x = delta, y = norm_centroid_dist, color = method, alpha = alpha_val)) +
-  geom_hline(yintercept = 1, linetype = "dashed", color = "grey60", linewidth = 0.3) +
-  geom_ribbon(aes(ymin = norm_centroid_dist - norm_se, 
-                  ymax = norm_centroid_dist + norm_se, fill = method, group = interaction(method, threshold)), 
+p_sweep_realistic_taxa_filtered <- ggplot(centroid_sweep_realistic_taxa_filtered, aes(x = delta, y = mean_centroid_pct, color = method, alpha = alpha_val)) +
+  geom_ribbon(aes(ymin = mean_centroid_pct - se_centroid_pct, 
+                  ymax = mean_centroid_pct + se_centroid_pct, fill = method, group = interaction(method, threshold)), 
               alpha = 0.2, color = NA) +
   geom_line(linewidth = 0.5, aes(group = interaction(method, threshold))) +
   geom_point(size = 1.0, aes(group = interaction(method, threshold))) +
@@ -3193,10 +3271,10 @@ p_sweep_realistic_taxa_filtered <- ggplot(centroid_sweep_realistic_taxa_filtered
     breaks <- unique(centroid_sweep_realistic_taxa_filtered$delta)
     breaks[breaks == 0 | breaks >= 0.25]
   }, labels = format_axis_labels) +
-  scale_y_continuous(labels = format_axis_labels) +
+  scale_y_continuous(labels = format_axis_labels, limits = c(0, NA)) +
   labs(
     x = "Differential dispersion (log)",
-    y = "Normalized distance"
+    y = "Centroid shift (% of mean hull radius)"
   ) +
   theme_multipanel
 
