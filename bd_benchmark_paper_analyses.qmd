@@ -107,7 +107,6 @@ library(ggrepel)
 source("simulate_compositional_bb.R")
 source("utils_proportion_transform.R")
 # Source _targets.R to get helper functions (functions are defined before the targets list)
-source("_targets.R")
 
 knitr::opts_chunk$set(
   fig.path = "ibd_paper_figures/",
