@@ -106,8 +106,6 @@ library(ggrepel)
 
 source("simulate_compositional_bb.R")
 source("utils_proportion_transform.R")
-# Source _targets.R to get helper functions (functions are defined before the targets list)
-source("_targets.R")
 
 knitr::opts_chunk$set(
   fig.path = "ibd_paper_figures/",
@@ -2126,6 +2124,8 @@ if (!file.exists(targets_script)) {
   targets_script <- file.path(qmd_dir, "_targets.R")
 }
 targets::tar_config_set(script = targets_script)
+# Source helper functions from _targets.R AFTER tar_script/tar_make.
+source(targets_script)
 
 # Load basic parameters that are used in many places
 sccomp_params <- targets::tar_read("sccomp_params")
@@ -2896,6 +2896,16 @@ k_realistic_case4_5 <- prec_slope_case4_5  # k = prec_slope for simulator
 # Row 1 uses delta DO = 0.5 from Setting DO_no_sd
 # Load required targets
 sweep_setting_DO_no_sd_jobs <- targets::tar_read("sweep_setting_DO_no_sd_jobs")
+
+# Allow running this chunk standalone in IDE sessions where setup may be skipped.
+if (!exists("simulate_case_realistic_taxa")) {
+  targets_script_local <- file.path(getwd(), "_targets.R")
+  if (!file.exists(targets_script_local)) {
+    qmd_dir_local <- dirname(knitr::current_input(dir = TRUE))
+    targets_script_local <- file.path(qmd_dir_local, "_targets.R")
+  }
+  source(targets_script_local)
+}
 
 # Recreate the simulation for delta = 0.5 (matching the DO_no_sd sweep)
 # This matches the simulation used in the DO_no_sd sweep
