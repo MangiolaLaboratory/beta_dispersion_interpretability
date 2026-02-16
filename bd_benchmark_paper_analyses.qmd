@@ -3378,7 +3378,7 @@ cat("- Top 30 taxa remaining after filter:", top30_after_filter, "out of 30\n")
 cat("- Taxa shown in whisker plot:", top30_after_filter, "\n")
 cat("\n")
 
-# Create whisker plot for ALL filtered taxa (not just top 30)
+# Create whisker plot for top 20 most abundant filtered taxa
 arcsin_sqrt_trans_realistic_taxa <- scales::trans_new(
   name = "arcsin_sqrt",
   transform = function(x) asin(sqrt(pmax(0, pmin(1, x)))),
@@ -3388,6 +3388,7 @@ arcsin_sqrt_trans_realistic_taxa <- scales::trans_new(
 )
 
 d_whisker_realistic_taxa_all <- sim_realistic_taxa_filtered$count_long %>%
+  dplyr::filter(taxon_id %in% taxon_abundance_realistic_taxa_original) %>%
   dplyr::mutate(proportion = count / library_size) %>%
   dplyr::group_by(group, taxon_id) %>%
     dplyr::summarise(
@@ -3764,14 +3765,14 @@ seed_idx_fig3 <- 1
 
 ```{r setting-DA-no-sd-filtered-pcoa-plots}
 # Create PCoA panel for Setting DA_no_sd (filtered) using sweep analysis outputs
-# Use threshold = 0.005 (0.5%) for filtered plots
+# Use threshold = 0.001 (0.1%) for filtered plots
 sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs")
 sweep_setting_DA_no_sd_jobs_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_jobs_with_threshold")
 sweep_setting_DA_no_sd_res <- targets::tar_read("sweep_setting_DA_no_sd_res")
 # Use the same seed for all cases (1, 10, 40 DA) for consistency
 available_seeds <- unique(sweep_setting_DA_no_sd_jobs$seed)
 seed_fig3_pcoa <- available_seeds[min(seed_idx_fig3, length(available_seeds))]
-threshold_filtered <- 0.005  # Use 0.5% threshold for filtered plots
+threshold_filtered <- 0.001  # Use 0.1% threshold for filtered plots
 
 # Get analysis results for filtered (0.5% threshold) - all using the same seed
 analysis_1_raw <- get_sweep_analysis_with_threshold(sweep_setting_DA_no_sd_res, sweep_setting_DA_no_sd_jobs_with_threshold, seed_fig3_pcoa, 1, threshold_filtered)
@@ -3985,14 +3986,14 @@ sweep_setting_DA_no_sd_res <- targets::tar_read("sweep_setting_DA_no_sd_res")
 # Use the same seed as PCoA plots for consistency (uses seed_idx_fig3 from figure-3-seed-selection chunk)
 available_seeds_fig3 <- unique(sweep_setting_DA_no_sd_jobs$seed)
 seed_40_da_fig3 <- available_seeds_fig3[min(seed_idx_fig3, length(available_seeds_fig3))]
-# Use threshold = 0.005 (0.5%) for Figure 3
-threshold_fig3 <- 0.005
+# Use threshold = 0.001 (0.1%) for Figure 3
+threshold_fig3 <- 0.001
 idx_40_da <- get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_40_da_fig3, 40)
 sim_40_da <- sweep_setting_DA_no_sd_sim[[idx_40_da]]
 sim_40_da_filtered <- sim_40_da
 sim_40_da_filtered$count_long <- filter_by_abundance_for_plot(
   sim_40_da$count_long,
-  abundance_threshold
+  0.001  # Use 0.1% threshold for Figure 3
 )
 
 # Run comparison for 40 DA case (filtered analysis from sweeps)
@@ -4001,7 +4002,25 @@ cmp_40_da <- format_analysis_results_for_plotting(
   case_label = "Setting DA_no_sd (40 DA, filtered)"
 )
 
-# Create whisker plot for 40 DA case (filtered taxa only)
+# Get top 30 most abundant taxa for whisker plot (from original unfiltered simulation)
+taxon_abundance_40_da_original <- sim_40_da$count_long %>%
+  dplyr::mutate(proportion = count / library_size) %>%
+  dplyr::group_by(taxon_id) %>%
+  dplyr::summarise(mean_prop = mean(proportion, na.rm = TRUE), .groups = "drop") %>%
+  dplyr::arrange(dplyr::desc(mean_prop)) %>%
+  dplyr::slice_head(n = 30) %>%
+  dplyr::pull(taxon_id)
+
+# Check how many of the top 30 remain after filtering
+top30_after_filter_40_da <- sum(taxon_abundance_40_da_original %in% unique(sim_40_da_filtered$count_long$taxon_id))
+
+cat("\n**Figure 3 Whisker Plot Taxa Selection:**\n")
+cat("- Top 30 taxa selected from original simulation\n")
+cat("- Top 30 taxa remaining after 0.1% filter:", top30_after_filter_40_da, "out of 30\n")
+cat("- Taxa shown in whisker plot:", top30_after_filter_40_da, "\n")
+cat("\n")
+
+# Create whisker plot for top 30 most abundant taxa (40 DA case, filtered)
 arcsin_sqrt_trans_40_da <- scales::trans_new(
   name = "arcsin_sqrt",
   transform = function(x) asin(sqrt(pmax(0, pmin(1, x)))),
@@ -4011,6 +4030,7 @@ arcsin_sqrt_trans_40_da <- scales::trans_new(
 )
 
 d_whisker_40_da <- sim_40_da_filtered$count_long %>%
+    dplyr::filter(taxon_id %in% taxon_abundance_40_da_original) %>%
     dplyr::mutate(proportion = count / library_size) %>%
     dplyr::group_by(group, taxon_id) %>%
     dplyr::summarise(
