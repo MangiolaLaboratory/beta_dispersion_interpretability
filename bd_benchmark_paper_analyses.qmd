@@ -269,14 +269,14 @@ plot_betadisper_pcoa_and_boxplot <- function(
     {if (segments) geom_segment(
       data = seg_df,
       aes(x = cx, y = cy, xend = Axis1, yend = Axis2, color = group),
-      linewidth = 0.25,
+      linewidth = 0.1,
       alpha = 0.5
     )} +
     {if (hull) geom_polygon(
       data = hull_df,
-      aes(x = Axis1, y = Axis2, fill = group, group = group),
+      aes(x = Axis1, y = Axis2, fill = group, group = group, color = group),
       alpha = 0.15,
-      color = NA
+      linewidth = 0.1
     )} +
     geom_point(
       data = sites,
@@ -628,12 +628,23 @@ pretty_method_label_box <- function(method_key) {
 
 # Define consistent color scheme for all methods (used across all plots)
 roc_colors_all <- c(
-  "Bray–Curtis" = RColorBrewer::brewer.pal(8, "Dark2")[1],
-  "Aitchison" = RColorBrewer::brewer.pal(8, "Dark2")[2],
-  "robust Aitchison" = RColorBrewer::brewer.pal(8, "Dark2")[3],
-  "Jaccard" = RColorBrewer::brewer.pal(8, "Dark2")[4],
-  "Hellinger" = RColorBrewer::brewer.pal(8, "Dark2")[5]
+  "Bray–Curtis" = RColorBrewer::brewer.pal(9, "Set1")[1],
+  "Aitchison" = RColorBrewer::brewer.pal(9, "Set1")[2],
+  "robust Aitchison" = RColorBrewer::brewer.pal(9, "Set1")[3],
+  "Jaccard" = RColorBrewer::brewer.pal(9, "Set1")[4],
+  "Hellinger" = RColorBrewer::brewer.pal(9, "Set1")[5]
 )
+method_levels <- names(roc_colors_all)
+
+# Single source of truth for method levels/colors used in all sweeps and summaries.
+coerce_method_levels <- function(x) {
+  x_chr <- trimws(as.character(x))
+  unknown <- setdiff(unique(x_chr), method_levels)
+  if (length(unknown) > 0) {
+    stop("Unknown method labels (no color mapping defined): ", paste(unknown, collapse = ", "))
+  }
+  factor(x_chr, levels = method_levels)
+}
 
 # format_analysis_results_for_plotting is defined in this QMD (plotting helper function)
 ```
@@ -2599,7 +2610,7 @@ plot_da_taxa_sweep_results <- function(
   x_limits = NULL,
   x_breaks = NULL
 ) {
-  standard_methods_labels <- c("Bray–Curtis", "Aitchison", "robust Aitchison", "Jaccard", "Hellinger")
+  standard_methods_labels <- method_levels
 
   # Convert raw method keys to pretty labels, then restrict to the 5 standard methods
   fpr_data_with_labels <- fpr_data %>%
@@ -2614,7 +2625,7 @@ plot_da_taxa_sweep_results <- function(
       TRUE ~ NA_character_
     )) %>%
     dplyr::filter(!is.na(method_label)) %>%
-    dplyr::mutate(method_label = factor(method_label, levels = standard_methods_labels))
+    dplyr::mutate(method_label = coerce_method_levels(method_label))
   
   # Handle both uppercase FPR and lowercase fpr column names
   fpr_col <- if ("FPR" %in% names(fpr_data_with_labels)) "FPR" else "fpr"
@@ -2647,7 +2658,7 @@ plot_da_taxa_sweep_results <- function(
     geom_hline(yintercept = 0.05, linetype = "dashed", color = "grey60", linewidth = 0.1) +
     geom_line(linewidth = 0.1, aes(group = if(has_threshold) interaction(method_label, threshold) else method_label)) +
     geom_point(size = 1.0, stroke = 0, aes(group = if(has_threshold) interaction(method_label, threshold) else method_label)) +
-    scale_color_manual(values = roc_colors_all[standard_methods_labels], breaks = standard_methods_labels, drop = FALSE, name = NULL) +
+    scale_color_manual(values = roc_colors_all, breaks = standard_methods_labels, drop = FALSE, name = NULL) +
     scale_alpha_identity(guide = "none") +
     scale_x_continuous(
       breaks = if (is.null(x_breaks)) unique(fpr_data_with_labels$n_da_taxa) else x_breaks,
@@ -3193,6 +3204,7 @@ fnr_sweep_realistic_taxa_filtered <- sweep_setting_DO_no_sd_fpr %>%
     .groups = "drop"
   ) %>%
   dplyr::mutate(
+    method = coerce_method_levels(method),
     threshold_label = dplyr::case_when(
       threshold == 0.0 ~ "unfiltered",
       threshold == 0.005 ~ "0.5%",
@@ -3207,20 +3219,10 @@ fnr_sweep_realistic_taxa_filtered <- sweep_setting_DO_no_sd_fpr %>%
     )
   )
 
-# Use consistent colors from roc_colors_all - map each method to its color
-fnr_sweep_methods_realistic_taxa_filtered <- unique(fnr_sweep_realistic_taxa_filtered$method)
-fnr_sweep_colors_realistic_taxa_filtered <- roc_colors_all[fnr_sweep_methods_realistic_taxa_filtered]
-# Ensure all methods have colors (fallback to grey if not in roc_colors_all)
-missing_colors_fnr_realistic_taxa_filtered <- is.na(fnr_sweep_colors_realistic_taxa_filtered)
-if (any(missing_colors_fnr_realistic_taxa_filtered)) {
-  fnr_sweep_colors_realistic_taxa_filtered[missing_colors_fnr_realistic_taxa_filtered] <- "grey50"
-}
-names(fnr_sweep_colors_realistic_taxa_filtered) <- fnr_sweep_methods_realistic_taxa_filtered
-
 p_sweep_fnr_realistic_taxa_filtered <- ggplot(fnr_sweep_realistic_taxa_filtered, aes(x = delta, y = FNR, color = method, alpha = alpha_val)) +
   geom_line(linewidth = 0.1, aes(group = interaction(method, threshold))) +
   geom_point(size = 1.0, stroke = 0, aes(group = interaction(method, threshold))) +
-  scale_color_manual(values = fnr_sweep_colors_realistic_taxa_filtered, name = NULL) +
+  scale_color_manual(values = roc_colors_all, breaks = method_levels, drop = FALSE, name = NULL) +
   scale_alpha_identity(guide = "none") +
   scale_x_continuous(breaks = {
     breaks <- unique(fnr_sweep_realistic_taxa_filtered$delta)
@@ -3244,6 +3246,7 @@ centroid_sweep_realistic_taxa_filtered_raw <- sweep_setting_DO_no_sd_fpr %>%
     .groups = "drop"
   ) %>%
   dplyr::mutate(
+    method = coerce_method_levels(method),
     threshold_label = dplyr::case_when(
       threshold == 0.0 ~ "unfiltered",
       threshold == 0.005 ~ "0.5%",
@@ -3294,15 +3297,6 @@ fmt_p_lmm <- function(p) {
 }
 lmm_label_fig2 <- paste0("p = ", fmt_p_lmm(lmm_p_delta_fig2))
 
-# Use consistent colors from roc_colors_all
-sweep_methods_realistic_taxa_filtered <- unique(centroid_sweep_realistic_taxa_filtered$method)
-sweep_colors_realistic_taxa_filtered <- roc_colors_all[sweep_methods_realistic_taxa_filtered]
-missing_colors_realistic_taxa_filtered <- is.na(sweep_colors_realistic_taxa_filtered)
-if (any(missing_colors_realistic_taxa_filtered)) {
-  sweep_colors_realistic_taxa_filtered[missing_colors_realistic_taxa_filtered] <- "grey50"
-}
-names(sweep_colors_realistic_taxa_filtered) <- sweep_methods_realistic_taxa_filtered
-
 p_sweep_realistic_taxa_filtered <- ggplot(centroid_sweep_realistic_taxa_filtered, aes(x = delta, y = mean_centroid_pct, color = method, alpha = alpha_val)) +
   geom_ribbon(aes(ymin = mean_centroid_pct - se_centroid_pct, 
                   ymax = mean_centroid_pct + se_centroid_pct, fill = method, group = interaction(method, threshold)), 
@@ -3327,8 +3321,8 @@ p_sweep_realistic_taxa_filtered <- ggplot(centroid_sweep_realistic_taxa_filtered
     fontface = "plain",
     color = "black"
   ) +
-  scale_color_manual(values = sweep_colors_realistic_taxa_filtered, name = NULL) +
-  scale_fill_manual(values = sweep_colors_realistic_taxa_filtered, guide = "none") +
+  scale_color_manual(values = roc_colors_all, breaks = method_levels, drop = FALSE, name = NULL) +
+  scale_fill_manual(values = roc_colors_all, breaks = method_levels, drop = FALSE, guide = "none") +
   scale_alpha_identity(guide = "none") +
   scale_x_continuous(breaks = {
     breaks <- unique(centroid_sweep_realistic_taxa_filtered$delta)
@@ -3340,7 +3334,12 @@ p_sweep_realistic_taxa_filtered <- ggplot(centroid_sweep_realistic_taxa_filtered
     y = "Centroid shift (% of mean hull radius)"
   ) +
   coord_cartesian(clip = "off") +
-  theme_multipanel
+  theme_multipanel +
+  theme(
+    panel.grid.major.y = element_line(linewidth = 0.1, color = "grey90"),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.major.x = element_blank()
+  )
 
 # Get top 30 most abundant taxa for whisker plot (Figure 2, Setting DO_no_sd filtered)
 # Use the ORIGINAL sim_realistic_taxa (before filtering) to identify top 30 taxa, then filter those
@@ -3568,22 +3567,13 @@ fnr_sweep_realistic_taxa <- roc_stats_realistic_taxa %>%
     n_fn = sum(p_value > 0.05),
     FNR = n_fn / n_sims,
     .groups = "drop"
-  )
-
-# Use consistent colors from roc_colors_all - map each method to its color
-fnr_sweep_methods_realistic_taxa <- unique(fnr_sweep_realistic_taxa$method)
-fnr_sweep_colors_realistic_taxa <- roc_colors_all[fnr_sweep_methods_realistic_taxa]
-# Ensure all methods have colors (fallback to grey if not in roc_colors_all)
-missing_colors_fnr_realistic_taxa <- is.na(fnr_sweep_colors_realistic_taxa)
-if (any(missing_colors_fnr_realistic_taxa)) {
-  fnr_sweep_colors_realistic_taxa[missing_colors_fnr_realistic_taxa] <- "grey50"
-}
-names(fnr_sweep_colors_realistic_taxa) <- fnr_sweep_methods_realistic_taxa
+  ) %>%
+  dplyr::mutate(method = coerce_method_levels(method))
 
 p_sweep_fnr_realistic_taxa <- ggplot(fnr_sweep_realistic_taxa, aes(x = delta, y = FNR, color = method)) +
   geom_line(linewidth = 0.1) +
   geom_point(size = 1.0, stroke = 0) +
-  scale_color_manual(values = fnr_sweep_colors_realistic_taxa, name = NULL) +
+  scale_color_manual(values = roc_colors_all, breaks = method_levels, drop = FALSE, name = NULL) +
   scale_x_continuous(breaks = {
     breaks <- unique(fnr_sweep_realistic_taxa$delta)
     breaks[breaks == 0 | breaks >= 0.25]
@@ -3614,19 +3604,10 @@ baseline_realistic_taxa <- centroid_sweep_realistic_taxa_raw %>%
 centroid_sweep_realistic_taxa <- centroid_sweep_realistic_taxa_raw %>%
   dplyr::left_join(baseline_realistic_taxa, by = "method") %>%
       dplyr::mutate(
+    method = coerce_method_levels(method),
     norm_centroid_dist = mean_centroid_dist / baseline_dist,
     norm_se = se_centroid_dist / baseline_dist
   )
-
-# Use consistent colors from roc_colors_all - map each method to its color
-sweep_methods_realistic_taxa <- unique(centroid_sweep_realistic_taxa$method)
-sweep_colors_realistic_taxa <- roc_colors_all[sweep_methods_realistic_taxa]
-# Ensure all methods have colors (fallback to grey if not in roc_colors_all)
-missing_colors_realistic_taxa <- is.na(sweep_colors_realistic_taxa)
-if (any(missing_colors_realistic_taxa)) {
-  sweep_colors_realistic_taxa[missing_colors_realistic_taxa] <- "grey50"
-}
-names(sweep_colors_realistic_taxa) <- sweep_methods_realistic_taxa
 
 p_sweep_realistic_taxa <- ggplot(centroid_sweep_realistic_taxa, aes(x = delta, y = norm_centroid_dist, color = method)) +
   geom_hline(yintercept = 1, linetype = "dashed", color = "grey60", linewidth = 0.1) +
@@ -3635,8 +3616,8 @@ p_sweep_realistic_taxa <- ggplot(centroid_sweep_realistic_taxa, aes(x = delta, y
               alpha = 0.2, color = NA) +
   geom_line(linewidth = 0.1) +
   geom_point(size = 1.0, stroke = 0) +
-  scale_color_manual(values = sweep_colors_realistic_taxa, name = NULL) +
-  scale_fill_manual(values = sweep_colors_realistic_taxa, guide = "none") +
+  scale_color_manual(values = roc_colors_all, breaks = method_levels, drop = FALSE, name = NULL) +
+  scale_fill_manual(values = roc_colors_all, breaks = method_levels, drop = FALSE, guide = "none") +
   scale_x_continuous(breaks = {
     breaks <- unique(centroid_sweep_realistic_taxa$delta)
     breaks[breaks == 0 | breaks >= 0.25]
