@@ -1793,7 +1793,7 @@ list(
   # Number of simulation replications (set to small number for development)
   tar_target(
     n_reps_auc,
-    1L  # Change this to 20 or higher for final runs
+    100L  # Change this to 20 or higher for final runs
   ),
   tar_target(
     abundance_thresholds,
@@ -2913,6 +2913,8 @@ target_delta <- 0.5
 intercept_base <- -6
 intercept_disp <- c(intercept_base, intercept_base + target_delta)
 base_seed <- unique(sweep_setting_DO_no_sd_jobs$seed)[1]
+
+source("_targets.R")
 
 sim_realistic_taxa <- simulate_case_realistic_taxa(
   slope_vector = rep(0, sim_params$n_taxa),  # No DA
