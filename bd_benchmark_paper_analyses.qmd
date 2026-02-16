@@ -103,10 +103,10 @@ library(ggside)
 library(tidyHeatmap)
 library(sccomp)
 library(ggrepel)
+library(lme4)
 
 source("simulate_compositional_bb.R")
 source("utils_proportion_transform.R")
-# Source _targets.R to get helper functions (functions are defined before the targets list)
 
 knitr::opts_chunk$set(
   fig.path = "ibd_paper_figures/",
@@ -2125,6 +2125,8 @@ if (!file.exists(targets_script)) {
   targets_script <- file.path(qmd_dir, "_targets.R")
 }
 targets::tar_config_set(script = targets_script)
+# Source helper functions from _targets.R AFTER tar_script/tar_make.
+source(targets_script)
 
 # Load basic parameters that are used in many places
 sccomp_params <- targets::tar_read("sccomp_params")
@@ -2642,9 +2644,9 @@ plot_da_taxa_sweep_results <- function(
   }
   
   p <- ggplot(fpr_data_with_labels, aes(x = n_da_taxa, y = !!sym(fpr_col), color = method_label, alpha = alpha_val)) +
-    geom_hline(yintercept = 0.05, linetype = "dashed", color = "grey60", linewidth = 0.3) +
-    geom_line(linewidth = 0.5, aes(group = if(has_threshold) interaction(method_label, threshold) else method_label)) +
-    geom_point(size = 1.0, aes(group = if(has_threshold) interaction(method_label, threshold) else method_label)) +
+    geom_hline(yintercept = 0.05, linetype = "dashed", color = "grey60", linewidth = 0.1) +
+    geom_line(linewidth = 0.1, aes(group = if(has_threshold) interaction(method_label, threshold) else method_label)) +
+    geom_point(size = 1.0, stroke = 0, aes(group = if(has_threshold) interaction(method_label, threshold) else method_label)) +
     scale_color_manual(values = roc_colors_all[standard_methods_labels], breaks = standard_methods_labels, drop = FALSE, name = NULL) +
     scale_alpha_identity(guide = "none") +
     scale_x_continuous(
@@ -2896,6 +2898,16 @@ k_realistic_case4_5 <- prec_slope_case4_5  # k = prec_slope for simulator
 # Load required targets
 sweep_setting_DO_no_sd_jobs <- targets::tar_read("sweep_setting_DO_no_sd_jobs")
 
+# Allow running this chunk standalone in IDE sessions where setup may be skipped.
+if (!exists("simulate_case_realistic_taxa")) {
+  targets_script_local <- file.path(getwd(), "_targets.R")
+  if (!file.exists(targets_script_local)) {
+    qmd_dir_local <- dirname(knitr::current_input(dir = TRUE))
+    targets_script_local <- file.path(qmd_dir_local, "_targets.R")
+  }
+  source(targets_script_local)
+}
+
 # Recreate the simulation for delta = 0.5 (matching the DO_no_sd sweep)
 # This matches the simulation used in the DO_no_sd sweep
 # 
@@ -3127,7 +3139,7 @@ for (method_key in names(cmp_realistic_taxa_filtered$bd_by_method)) {
       cat("  Centroid separation by dimension (first 10):", paste(round(dist_by_dim, 6), collapse = ", "), "\n")
     }
   }
-}
+} 
 cat("\n=== End diagnostic ===\n\n")
 
 non_ibd_methods_realistic_taxa_filtered <- names(cmp_realistic_taxa_filtered$bd_by_method)[!startsWith(names(cmp_realistic_taxa_filtered$bd_by_method), "ibd")]
@@ -3208,8 +3220,8 @@ if (any(missing_colors_fnr_realistic_taxa_filtered)) {
 names(fnr_sweep_colors_realistic_taxa_filtered) <- fnr_sweep_methods_realistic_taxa_filtered
 
 p_sweep_fnr_realistic_taxa_filtered <- ggplot(fnr_sweep_realistic_taxa_filtered, aes(x = delta, y = FNR, color = method, alpha = alpha_val)) +
-  geom_line(linewidth = 0.5, aes(group = interaction(method, threshold))) +
-  geom_point(size = 1.0, aes(group = interaction(method, threshold))) +
+  geom_line(linewidth = 0.1, aes(group = interaction(method, threshold))) +
+  geom_point(size = 1.0, stroke = 0, aes(group = interaction(method, threshold))) +
   scale_color_manual(values = fnr_sweep_colors_realistic_taxa_filtered, name = NULL) +
   scale_alpha_identity(guide = "none") +
   scale_x_continuous(breaks = {
@@ -3250,6 +3262,40 @@ centroid_sweep_realistic_taxa_filtered_raw <- sweep_setting_DO_no_sd_fpr %>%
 
 centroid_sweep_realistic_taxa_filtered <- centroid_sweep_realistic_taxa_filtered_raw
 
+# Mixed-effects association model:
+# centroid shift (%) ~ differential dispersion (delta)
+# with random intercept and slope per method-threshold combination.
+lmm_data_fig2 <- sweep_setting_DO_no_sd_fpr %>%
+  dplyr::filter(!grepl("^IBD", method, ignore.case = TRUE)) %>%
+  dplyr::filter(is.finite(centroid_sep_pct_hull_radius)) %>%
+  dplyr::mutate(
+    method_threshold = interaction(method, threshold, drop = TRUE)
+  )
+
+lmm_full_fig2 <- lme4::lmer(
+  centroid_sep_pct_hull_radius ~ delta + (1 + delta | method_threshold),
+  data = lmm_data_fig2,
+  REML = FALSE
+)
+lmm_null_fig2 <- lme4::lmer(
+  centroid_sep_pct_hull_radius ~ 1 + (1 + delta | method_threshold),
+  data = lmm_data_fig2,
+  REML = FALSE
+)
+
+lmm_lrt_fig2 <- stats::anova(lmm_null_fig2, lmm_full_fig2)
+lmm_p_delta_fig2 <- lmm_lrt_fig2$`Pr(>Chisq)`[2]
+lmm_fixef_fig2 <- lme4::fixef(lmm_full_fig2)
+lmm_intercept_fig2 <- unname(lmm_fixef_fig2["(Intercept)"])
+lmm_slope_fig2 <- unname(lmm_fixef_fig2["delta"])
+
+fmt_p_lmm <- function(p) {
+  if (!is.finite(p)) return("NA")
+  if (p < 0.001) return("<0.001")
+  sprintf("%.3f", p)
+}
+lmm_label_fig2 <- paste0("p = ", fmt_p_lmm(lmm_p_delta_fig2))
+
 # Use consistent colors from roc_colors_all
 sweep_methods_realistic_taxa_filtered <- unique(centroid_sweep_realistic_taxa_filtered$method)
 sweep_colors_realistic_taxa_filtered <- roc_colors_all[sweep_methods_realistic_taxa_filtered]
@@ -3263,8 +3309,26 @@ p_sweep_realistic_taxa_filtered <- ggplot(centroid_sweep_realistic_taxa_filtered
   geom_ribbon(aes(ymin = mean_centroid_pct - se_centroid_pct, 
                   ymax = mean_centroid_pct + se_centroid_pct, fill = method, group = interaction(method, threshold)), 
               alpha = 0.2, color = NA) +
-  geom_line(linewidth = 0.5, aes(group = interaction(method, threshold))) +
-  geom_point(size = 1.0, aes(group = interaction(method, threshold))) +
+  geom_line(linewidth = 0.1, aes(group = interaction(method, threshold))) +
+  geom_point(size = 1.0, stroke = 0, aes(group = interaction(method, threshold))) +
+  geom_abline(
+    intercept = lmm_intercept_fig2,
+    slope = lmm_slope_fig2,
+    color = "black",
+    linewidth = 0.1,
+    linetype = "dotted"
+  ) +
+  annotate(
+    geom = "text",
+    x = 0.1,
+    y = 18,
+    label = lmm_label_fig2,
+    hjust = 0,
+    vjust = 1,
+    size = 2.6,
+    fontface = "plain",
+    color = "black"
+  ) +
   scale_color_manual(values = sweep_colors_realistic_taxa_filtered, name = NULL) +
   scale_fill_manual(values = sweep_colors_realistic_taxa_filtered, guide = "none") +
   scale_alpha_identity(guide = "none") +
@@ -3277,6 +3341,7 @@ p_sweep_realistic_taxa_filtered <- ggplot(centroid_sweep_realistic_taxa_filtered
     x = "Differential dispersion (log)",
     y = "Centroid shift (% of mean hull radius)"
   ) +
+  coord_cartesian(clip = "off") +
   theme_multipanel
 
 # Get top 30 most abundant taxa for whisker plot (Figure 2, Setting DO_no_sd filtered)
@@ -3518,8 +3583,8 @@ if (any(missing_colors_fnr_realistic_taxa)) {
 names(fnr_sweep_colors_realistic_taxa) <- fnr_sweep_methods_realistic_taxa
 
 p_sweep_fnr_realistic_taxa <- ggplot(fnr_sweep_realistic_taxa, aes(x = delta, y = FNR, color = method)) +
-  geom_line(linewidth = 0.5) +
-  geom_point(size = 1.0) +
+  geom_line(linewidth = 0.1) +
+  geom_point(size = 1.0, stroke = 0) +
   scale_color_manual(values = fnr_sweep_colors_realistic_taxa, name = NULL) +
   scale_x_continuous(breaks = {
     breaks <- unique(fnr_sweep_realistic_taxa$delta)
@@ -3566,12 +3631,12 @@ if (any(missing_colors_realistic_taxa)) {
 names(sweep_colors_realistic_taxa) <- sweep_methods_realistic_taxa
 
 p_sweep_realistic_taxa <- ggplot(centroid_sweep_realistic_taxa, aes(x = delta, y = norm_centroid_dist, color = method)) +
-  geom_hline(yintercept = 1, linetype = "dashed", color = "grey60", linewidth = 0.3) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "grey60", linewidth = 0.1) +
   geom_ribbon(aes(ymin = norm_centroid_dist - norm_se, 
                   ymax = norm_centroid_dist + norm_se, fill = method), 
               alpha = 0.2, color = NA) +
-  geom_line(linewidth = 0.5) +
-  geom_point(size = 1.0) +
+  geom_line(linewidth = 0.1) +
+  geom_point(size = 1.0, stroke = 0) +
   scale_color_manual(values = sweep_colors_realistic_taxa, name = NULL) +
   scale_fill_manual(values = sweep_colors_realistic_taxa, guide = "none") +
   scale_x_continuous(breaks = {
