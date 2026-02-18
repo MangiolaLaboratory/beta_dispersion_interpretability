@@ -2466,28 +2466,38 @@ cat("SD:", round(sd(v_intercept), 4), "\n")
 cat("Range: [", round(min(v_intercept), 4), ",", 
     round(max(v_intercept), 4), "]\n")
 
-v_intercept_mean <- mean(v_intercept)
-p_v_effect_intercept <- ggplot(data.frame(v_effect = v_intercept), aes(x = v_effect)) +
+# Convert v_effect (log precision) to log overdispersion: log(σ) ≈ -log(precision)
+log_overdispersion_intercept <- -v_intercept
+log_overdispersion_slope <- -v_slope
+
+cat("\n=== Log Overdispersion Intercept (converted from v_effect) ===\n")
+cat("Mean:", round(mean(log_overdispersion_intercept), 4), "\n")
+cat("SD:", round(sd(log_overdispersion_intercept), 4), "\n")
+cat("Range: [", round(min(log_overdispersion_intercept), 4), ",", 
+    round(max(log_overdispersion_intercept), 4), "]\n")
+
+log_overdispersion_intercept_mean <- mean(log_overdispersion_intercept)
+p_v_effect_intercept <- ggplot(data.frame(log_overdispersion = log_overdispersion_intercept), aes(x = log_overdispersion)) +
   geom_density(fill = "lightgrey", alpha = 1, color = "black", linewidth = 0.3) +
-  geom_vline(xintercept = v_intercept_mean, linetype = "dashed", color = "grey50", linewidth = 0.5) +
+  geom_vline(xintercept = log_overdispersion_intercept_mean, linetype = "dashed", color = "grey50", linewidth = 0.5) +
   geom_rug(alpha = 0.5) +
-  labs(x = "log precision", y = "Density") +
+  labs(x = "log overdispersion", y = "Density") +
   scale_x_continuous(labels = format_axis_labels) +
   scale_y_continuous(labels = format_axis_labels) +
   theme_multipanel
 
-cat("\n=== Slope v_effect Distribution ===\n")
-cat("Mean:", round(mean(v_slope), 4), "\n")
-cat("SD:", round(sd(v_slope), 4), "\n")
-cat("Range: [", round(min(v_slope), 4), ",", 
-    round(max(v_slope), 4), "]\n")
+cat("\n=== Log Overdispersion Slope (converted from v_effect) ===\n")
+cat("Mean:", round(mean(log_overdispersion_slope), 4), "\n")
+cat("SD:", round(sd(log_overdispersion_slope), 4), "\n")
+cat("Range: [", round(min(log_overdispersion_slope), 4), ",", 
+    round(max(log_overdispersion_slope), 4), "]\n")
 
-v_slope_mean <- mean(v_slope)
-p_v_effect_slope <- ggplot(data.frame(v_effect = v_slope), aes(x = v_effect)) +
+log_overdispersion_slope_mean <- mean(log_overdispersion_slope)
+p_v_effect_slope <- ggplot(data.frame(log_overdispersion = log_overdispersion_slope), aes(x = log_overdispersion)) +
   geom_density(fill = "lightgrey", alpha = 1, color = "black", linewidth = 0.3) +
-  geom_vline(xintercept = v_slope_mean, linetype = "dashed", color = "grey50", linewidth = 0.5) +
+  geom_vline(xintercept = log_overdispersion_slope_mean, linetype = "dashed", color = "grey50", linewidth = 0.5) +
   geom_rug(alpha = 0.5) +
-  labs(x = "log precision", y = "Density") +
+  labs(x = "log overdispersion", y = "Density") +
   scale_x_continuous(labels = format_axis_labels) +
   scale_y_continuous(labels = format_axis_labels) +
   theme_multipanel
@@ -3824,7 +3834,7 @@ p_setting_DA_no_sd_filtered_top <- (p_setting_DA_no_sd_filtered_fpr | pcoa_panel
 
 ### Setting DA_sd (filtered): Differential abundance, with sd on overdispersion, with abundance filtering (<0.1%)
 
-This setting uses the same simulated data as Setting DA_sd but filters out taxa with mean abundance <0.1% before computing distances and running PERMDISP. This tests whether the trends observed in Setting DA_sd are driven by low abundance taxa.
+This setting uses the same simulated data as Setting DA_sd but filters out taxa with mean abundance <0.1% before computing distances and running PERMDISP. Here, `sd_log_overdispersion` introduces taxon-specific baseline OD heterogeneity shared across groups (not condition-specific random OD shifts), so n_da_taxa = 0 is a no-differential-OD null. This tests whether the trends observed in Setting DA_sd are driven by low abundance taxa.
 
 ```{r setting-DA-sd-filtered-plot, fig.width=12, fig.height=8}
 # Get FPR data for all thresholds (0.005 opaque, 0.001 lighter, 0.0 lightest)
@@ -4166,7 +4176,7 @@ invisible(gc())
 
 ### Setting DA_no_sd: Differential abundance, no sd on overdispersion
 
-This setting sweeps over the number of DA taxa (0, 1, 2, 3, ...) using slopes sampled from **significant DA taxa only** (credible interval excludes 0). Uses **k = 0 (no mean-OD association)** to ensure proper FPR testing at n_da_taxa = 0. This tests how method performance changes as we progressively add more DA taxa, starting from no DA (FPR test) to increasing numbers of DA taxa (power test).
+This setting sweeps over the number of DA taxa (0, 1, 2, 3, ...) using slopes sampled from **significant DA taxa only** (credible interval excludes 0). Uses **k = 0 (no mean-OD association)** to ensure proper FPR testing at n_da_taxa = 0; with `sd_log_overdispersion = 0`, taxa also share the same baseline OD within and across groups at the null. This tests how method performance changes as we progressively add more DA taxa, starting from no DA (FPR test) to increasing numbers of DA taxa (power test).
 
 ```{r supp-fig-3, fig.width=16, fig.height=16}
 sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs")

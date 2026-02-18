@@ -636,10 +636,14 @@ simulate_compositional_bb <- function(
   # Step 2: Simulate log(sigma) at COHORT level
   # ========================================================================
   
-  # Generate random errors for log(sigma) per cohort-taxon combination
+  # Generate random errors for log(sigma) that are TAXON-specific but shared across cohorts.
+  # This ensures that `sd_log_overdispersion > 0` creates baseline OD heterogeneity across taxa
+  # without introducing differential OD between conditions when `intercept_dispersion` is scalar.
+  taxon_log_sigma_errors <- rnorm(n_taxa, mean = 0, sd = sd_log_overdispersion)
   cohort_log_sigma_errors <- matrix(
-    rnorm(n_cohorts * n_taxa, mean = 0, sd = sd_log_overdispersion),
-    nrow = n_cohorts, ncol = n_taxa
+    taxon_log_sigma_errors,
+    nrow = n_cohorts, ncol = n_taxa,
+    byrow = TRUE
   )
   
   # Allow cohort/group-specific dispersion intercepts
