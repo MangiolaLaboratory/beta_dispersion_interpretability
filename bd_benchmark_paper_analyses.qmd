@@ -1787,6 +1787,69 @@ summarise_fpr <- function(sweep_results) {
     )
 }
 
+run_permanova_job <- function(
+  sim_r,
+  threshold,
+  seed,
+  n_da_taxa,
+  permutations = 199,
+  standard_distance_methods = c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
+) {
+  sim_filtered <- sim_r
+  sim_filtered$count_long <- filter_by_abundance_cases(sim_r$count_long, threshold = threshold)
+
+  if (length(unique(sim_filtered$count_long$taxon_id)) < 3) {
+    return(tibble::tibble(
+      seed = integer(0),
+      n_da_taxa = integer(0),
+      threshold = numeric(0),
+      method = character(0),
+      p_value = numeric(0)
+    ))
+  }
+
+  inputs_std <- purrr::set_names(
+    lapply(standard_distance_methods, \(dm) {
+      build_standard_betadisper_inputs_paper(
+        count_long = sim_filtered$count_long,
+        sample_metadata = sim_filtered$sample_metadata,
+        distance_method = dm,
+        group_levels = c("non-IBD", "IBD")
+      )
+    }),
+    nm = paste0("permanova_", standard_distance_methods)
+  )
+
+  purrr::imap_dfr(inputs_std, \(inp, method_key) {
+    p_val <- tryCatch({
+      ad <- vegan::adonis2(inp$dist ~ group, data = data.frame(group = inp$group), permutations = permutations)
+      unname(ad$`Pr(>F)`[1])
+    }, error = function(e) {
+      NA_real_
+    })
+
+    tibble::tibble(
+      seed = seed,
+      n_da_taxa = n_da_taxa,
+      threshold = threshold,
+      method = method_key,
+      p_value = p_val
+    )
+  })
+}
+
+summarise_permanova_tpr <- function(permanova_results) {
+  permanova_results %>%
+    dplyr::filter(.data$n_da_taxa > 0) %>%
+    dplyr::group_by(.data$n_da_taxa, .data$method, .data$threshold) %>%
+    dplyr::summarise(
+      n_sims = sum(!is.na(.data$p_value)),
+      n_tp = sum(.data$p_value < 0.05, na.rm = TRUE),
+      TPR = dplyr::if_else(.data$n_sims > 0, .data$n_tp / .data$n_sims, NA_real_),
+      .groups = "drop"
+    )
+}
+
 list(
   tar_target(
     sccomp_result_file,
@@ -1900,6 +1963,28 @@ list(
   tar_target(
     sweep_setting_DA_no_sd_fpr,
     summarise_fpr(sweep_setting_DA_no_sd_res)
+  ),
+  tar_target(
+    sweep_setting_DA_no_sd_permanova_res,
+    {
+      threshold <- sweep_setting_DA_no_sd_jobs_with_threshold$threshold
+      seed <- sweep_setting_DA_no_sd_sim_with_threshold$seed
+      n_da_taxa <- sweep_setting_DA_no_sd_jobs_with_threshold$n_da_taxa
+
+      run_permanova_job(
+        sim_r = sweep_setting_DA_no_sd_sim_with_threshold,
+        threshold = threshold,
+        seed = seed,
+        n_da_taxa = n_da_taxa,
+        permutations = 199
+      )
+    },
+    pattern = map(sweep_setting_DA_no_sd_jobs_with_threshold, sweep_setting_DA_no_sd_sim_with_threshold),
+    iteration = "list"
+  ),
+  tar_target(
+    sweep_setting_DA_no_sd_permanova_tpr,
+    summarise_permanova_tpr(dplyr::bind_rows(sweep_setting_DA_no_sd_permanova_res))
   ),
   # Setting DA_sd: Simulation targets (differential abundance, with sd on overdispersion)
   tar_target(
@@ -3832,78 +3917,12 @@ p_setting_DA_no_sd_filtered_top <- (p_setting_DA_no_sd_filtered_fpr | pcoa_panel
 ```
 
 
-### PERMANOVA on Setting DA_no_sd (filtered): FNR with true differential composition
+### PERMANOVA on Setting DA_no_sd (filtered): TPR with true differential composition
 
 This panel uses the same filtered simulations as the first Figure 3 sweep (**Setting DA_no_sd**, `k = 0`, `sd_log_overdispersion = 0`) and evaluates **PERMANOVA true positive rate** (detection rate) when true differential abundance is present (`n_da_taxa > 0`).
 
-```{r setting-DA-no-sd-permanova-fnr, fig.width=12, fig.height=8}
-# Use the same simulations as the first Figure 3 sweep (DA_no_sd, with thresholds).
-sweep_setting_DA_no_sd_jobs_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_jobs_with_threshold")
-sweep_setting_DA_no_sd_sim_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_sim_with_threshold")
-
-permanova_distance_methods <- c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
-
-run_permanova_da_job <- function(sim_r, threshold, n_da_taxa, seed, distance_methods = permanova_distance_methods) {
-  sim_filtered <- sim_r
-  sim_filtered$count_long <- filter_by_abundance_cases(sim_r$count_long, threshold = threshold)
-
-  # Skip cases where filtering removes too many taxa for stable distance computation.
-  if (length(unique(sim_filtered$count_long$taxon_id)) < 3) {
-    return(tibble::tibble(
-      seed = integer(0),
-      n_da_taxa = integer(0),
-      threshold = numeric(0),
-      method = character(0),
-      p_value = numeric(0)
-    ))
-  }
-
-  purrr::map_dfr(distance_methods, \(dm) {
-    inp <- build_standard_betadisper_inputs_paper(
-      count_long = sim_filtered$count_long,
-      sample_metadata = sim_filtered$sample_metadata,
-      distance_method = dm,
-      group_levels = c("non-IBD", "IBD")
-    )
-
-    p_val <- tryCatch({
-      ad <- vegan::adonis2(inp$dist ~ group, data = data.frame(group = inp$group), permutations = 199)
-      unname(ad$`Pr(>F)`[1])
-    }, error = function(e) {
-      NA_real_
-    })
-
-    tibble::tibble(
-      seed = seed,
-      n_da_taxa = n_da_taxa,
-      threshold = threshold,
-      method = paste0("permanova_", dm),
-      p_value = p_val
-    )
-  })
-}
-
-permanova_da_results <- purrr::map_dfr(seq_len(nrow(sweep_setting_DA_no_sd_jobs_with_threshold)), \(i) {
-  job <- sweep_setting_DA_no_sd_jobs_with_threshold[i, , drop = FALSE]
-  sim_r <- sweep_setting_DA_no_sd_sim_with_threshold[[i]]
-
-  run_permanova_da_job(
-    sim_r = sim_r,
-    threshold = job$threshold[[1]],
-    n_da_taxa = job$n_da_taxa[[1]],
-    seed = job$seed[[1]]
-  )
-})
-
-permanova_da_tpr <- permanova_da_results %>%
-  dplyr::filter(.data$n_da_taxa > 0) %>%
-  dplyr::group_by(.data$n_da_taxa, .data$method, .data$threshold) %>%
-  dplyr::summarise(
-    n_sims = sum(!is.na(.data$p_value)),
-    n_tp = sum(.data$p_value < 0.05, na.rm = TRUE),
-    TPR = dplyr::if_else(.data$n_sims > 0, .data$n_tp / .data$n_sims, NA_real_),
-    .groups = "drop"
-  ) %>%
+```{r setting-DA-no-sd-permanova-tpr, fig.width=12, fig.height=8}
+permanova_da_tpr <- targets::tar_read("sweep_setting_DA_no_sd_permanova_tpr") %>%
   dplyr::mutate(
     method_label = dplyr::case_when(
       .data$method == "permanova_bray" ~ "Bray–Curtis",
