@@ -3832,27 +3832,124 @@ p_setting_DA_no_sd_filtered_top <- (p_setting_DA_no_sd_filtered_fpr | pcoa_panel
 ```
 
 
-### Setting DA_sd (filtered): Differential abundance, with sd on overdispersion, with abundance filtering (<0.1%)
+### PERMANOVA on Setting DA_no_sd (filtered): FNR with true differential composition
 
-This setting uses the same simulated data as Setting DA_sd but filters out taxa with mean abundance <0.1% before computing distances and running PERMDISP. Here, `sd_log_overdispersion` introduces taxon-specific baseline OD heterogeneity shared across groups (not condition-specific random OD shifts), so n_da_taxa = 0 is a no-differential-OD null. This tests whether the trends observed in Setting DA_sd are driven by low abundance taxa.
+This panel uses the same filtered simulations as the first Figure 3 sweep (**Setting DA_no_sd**, `k = 0`, `sd_log_overdispersion = 0`) and evaluates **PERMANOVA true positive rate** (detection rate) when true differential abundance is present (`n_da_taxa > 0`).
 
-```{r setting-DA-sd-filtered-plot, fig.width=12, fig.height=8}
-# Get FPR data for all thresholds (0.005 opaque, 0.001 lighter, 0.0 lightest)
-fpr_setting_DA_sd_all <- targets::tar_read("sweep_setting_DA_sd_fpr")
-fpr_setting_DA_sd_filtered <- fpr_setting_DA_sd_all
+```{r setting-DA-no-sd-permanova-fnr, fig.width=12, fig.height=8}
+# Use the same simulations as the first Figure 3 sweep (DA_no_sd, with thresholds).
+sweep_setting_DA_no_sd_jobs_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_jobs_with_threshold")
+sweep_setting_DA_no_sd_sim_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_sim_with_threshold")
 
-p_setting_DA_sd_filtered <- plot_da_taxa_sweep_results(
-  fpr_data = fpr_setting_DA_sd_filtered,
-  setting_name = paste0("Setting DA_sd (filtered): Differential abundance, with sd on overdispersion, with abundance filter (≥0.1%) (n=", n_samples, ", p=", n_taxa, 
-                       ", c=", round(intercept_disp_DA_sd, 2), 
-                       ", σ=", round(sigma_DA_sd, 5), 
-                       ", k=", round(k_fixed_DA_sd, 3),
-                       ", sd_log_od=", round(prec_sd_real, 3), ")"),
-  sigma_val = sigma_DA_sd,
-  intercept_disp_val = intercept_disp_DA_sd,
-  x_limits = c(0, 40),
-  x_breaks = c(0, 10, 20, 30, 40)
-)
+permanova_distance_methods <- c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
+
+run_permanova_da_job <- function(sim_r, threshold, n_da_taxa, seed, distance_methods = permanova_distance_methods) {
+  sim_filtered <- sim_r
+  sim_filtered$count_long <- filter_by_abundance_cases(sim_r$count_long, threshold = threshold)
+
+  # Skip cases where filtering removes too many taxa for stable distance computation.
+  if (length(unique(sim_filtered$count_long$taxon_id)) < 3) {
+    return(tibble::tibble(
+      seed = integer(0),
+      n_da_taxa = integer(0),
+      threshold = numeric(0),
+      method = character(0),
+      p_value = numeric(0)
+    ))
+  }
+
+  purrr::map_dfr(distance_methods, \(dm) {
+    inp <- build_standard_betadisper_inputs_paper(
+      count_long = sim_filtered$count_long,
+      sample_metadata = sim_filtered$sample_metadata,
+      distance_method = dm,
+      group_levels = c("non-IBD", "IBD")
+    )
+
+    p_val <- tryCatch({
+      ad <- vegan::adonis2(inp$dist ~ group, data = data.frame(group = inp$group), permutations = 199)
+      unname(ad$`Pr(>F)`[1])
+    }, error = function(e) {
+      NA_real_
+    })
+
+    tibble::tibble(
+      seed = seed,
+      n_da_taxa = n_da_taxa,
+      threshold = threshold,
+      method = paste0("permanova_", dm),
+      p_value = p_val
+    )
+  })
+}
+
+permanova_da_results <- purrr::map_dfr(seq_len(nrow(sweep_setting_DA_no_sd_jobs_with_threshold)), \(i) {
+  job <- sweep_setting_DA_no_sd_jobs_with_threshold[i, , drop = FALSE]
+  sim_r <- sweep_setting_DA_no_sd_sim_with_threshold[[i]]
+
+  run_permanova_da_job(
+    sim_r = sim_r,
+    threshold = job$threshold[[1]],
+    n_da_taxa = job$n_da_taxa[[1]],
+    seed = job$seed[[1]]
+  )
+})
+
+permanova_da_tpr <- permanova_da_results %>%
+  dplyr::filter(.data$n_da_taxa > 0) %>%
+  dplyr::group_by(.data$n_da_taxa, .data$method, .data$threshold) %>%
+  dplyr::summarise(
+    n_sims = sum(!is.na(.data$p_value)),
+    n_tp = sum(.data$p_value < 0.05, na.rm = TRUE),
+    TPR = dplyr::if_else(.data$n_sims > 0, .data$n_tp / .data$n_sims, NA_real_),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    method_label = dplyr::case_when(
+      .data$method == "permanova_bray" ~ "Bray–Curtis",
+      .data$method == "permanova_aitchison" ~ "Aitchison",
+      .data$method == "permanova_robust.aitchison" ~ "robust Aitchison",
+      .data$method == "permanova_robust_aitchison" ~ "robust Aitchison",
+      .data$method == "permanova_jaccard" ~ "Jaccard",
+      .data$method == "permanova_hellinger" ~ "Hellinger",
+      TRUE ~ NA_character_
+    ),
+    alpha_val = dplyr::case_when(
+      .data$threshold == 0.0 ~ 0.25,
+      .data$threshold == 0.005 ~ 1.0,
+      .data$threshold == 0.001 ~ 0.55,
+      TRUE ~ 1.0
+    ),
+    threshold_label = dplyr::case_when(
+      .data$threshold == 0.0 ~ "unfiltered",
+      .data$threshold == 0.005 ~ "0.5%",
+      .data$threshold == 0.001 ~ "0.1%",
+      TRUE ~ as.character(.data$threshold)
+    )
+  ) %>%
+  dplyr::filter(!is.na(.data$method_label)) %>%
+  dplyr::mutate(method_label = coerce_method_levels(.data$method_label))
+
+p_setting_DA_no_sd_permanova_tpr <- ggplot(
+  permanova_da_tpr,
+  aes(x = n_da_taxa, y = TPR, color = method_label, alpha = alpha_val)
+) +
+  geom_hline(yintercept = 0.05, linetype = "dashed", color = "grey60", linewidth = 0.1) +
+  geom_line(linewidth = 0.1, aes(group = interaction(method_label, threshold))) +
+  geom_point(size = 1.0, stroke = 0, aes(group = interaction(method_label, threshold))) +
+  scale_color_manual(values = roc_colors_all, breaks = method_levels, drop = FALSE, name = NULL) +
+  scale_alpha_identity(guide = "none") +
+  scale_x_continuous(
+    breaks = c(0, 10, 20, 30, 40),
+    limits = c(0, 40),
+    labels = format_axis_labels
+  ) +
+  scale_y_continuous(labels = format_axis_labels, limits = c(0, 1)) +
+  labs(
+    x = "Number of DA taxa",
+    y = "True positive rate (PERMANOVA)"
+  ) +
+  theme_multipanel
 ```
 
 ```{r figure-3-scatter}
@@ -4120,21 +4217,22 @@ p_figure3_row1 <- (p_whisker_40_da | alpha_plot_40_da | p_boxplots_40_da) +
 ```
 
 ```{r figure-3, fig.width=16, fig.height=12}
+#| fig-cap: "Figure 3. Top row: composition-level diagnostics for Setting DA_no_sd at 40 DA taxa (whisker plot, alpha-diversity scatter, and distance-to-centroid boxplots). Bottom-left column: (1) PERMDISP false positive rate sweep for Setting DA_no_sd (filtered), (2) PERMANOVA true positive rate sweep on the same Setting DA_no_sd simulations (filtered), and (3) FNR-FPR summary scatter. Bottom-right column: PCoA panels for Setting DA_no_sd (filtered)."
 # Organize Figure 3 in two columns:
 # Top row: whisker plot (40 DA) | alpha diversity (40 DA) | boxplots (40 DA)
-# Bottom: Left column: 3 rows (Setting DA_no_sd filtered FPR sweep, Setting DA_sd filtered FPR sweep, scatter plot)
+# Bottom: Left column: 3 rows (Setting DA_no_sd filtered FPR sweep, Setting DA_no_sd PERMANOVA TPR sweep, scatter plot)
 #         Right column: PCoA plots for Setting DA_no_sd filtered
 
 # Check that all plots exist and are valid
 cat("Checking plots for Figure 3...\n")
 cat("  p_figure3_row1:", !is.null(p_figure3_row1), ", class:", class(p_figure3_row1), "\n")
 cat("  p_setting_DA_no_sd_filtered_fpr:", !is.null(p_setting_DA_no_sd_filtered_fpr), ", class:", class(p_setting_DA_no_sd_filtered_fpr), "\n")
-cat("  p_setting_DA_sd_filtered:", !is.null(p_setting_DA_sd_filtered), ", class:", class(p_setting_DA_sd_filtered), "\n")
+cat("  p_setting_DA_no_sd_permanova_tpr:", !is.null(p_setting_DA_no_sd_permanova_tpr), ", class:", class(p_setting_DA_no_sd_permanova_tpr), "\n")
 cat("  p_scatter_fnr_fpr:", !is.null(p_scatter_fnr_fpr), ", class:", class(p_scatter_fnr_fpr), "\n")
 cat("  pcoa_panel_setting_DA_no_sd_filtered:", !is.null(pcoa_panel_setting_DA_no_sd_filtered), ", class:", class(pcoa_panel_setting_DA_no_sd_filtered), "\n")
 
 # Try building patchwork step by step
-left_col <- p_setting_DA_no_sd_filtered_fpr / p_setting_DA_sd_filtered / p_scatter_fnr_fpr
+left_col <- p_setting_DA_no_sd_filtered_fpr / p_setting_DA_no_sd_permanova_tpr / p_scatter_fnr_fpr
 cat("  left_col created, class:", class(left_col), "\n")
 
 right_col <- pcoa_panel_setting_DA_no_sd_filtered
@@ -4160,11 +4258,12 @@ ggsave("Figure_3.pdf", p_figure3, width = 183, height = 230, units = "mm")
 # Release heavy Figure 3 objects before supplementary figure 3
 rm(list = intersect(
   c(
-    "p_setting_DA_no_sd_filtered_fpr", "p_setting_DA_sd_filtered", "p_scatter_fnr_fpr",
+    "p_setting_DA_no_sd_filtered_fpr", "p_setting_DA_no_sd_permanova_tpr", "p_scatter_fnr_fpr",
     "pcoa_panel_setting_DA_no_sd_filtered", "p_figure3_row1", "left_col", "right_col",
     "bottom_row", "p_figure3", "cmp_40_da", "sim_40_da", "sim_40_da_filtered",
     "p_whisker_40_da", "alpha_plot_40_da", "p_boxplots_40_da", "distances_non_ibd_40_da",
     "d_whisker_40_da", "fpr_fig3_data", "fpr_fig3", "fnr_fig2", "scatter_data", "plot_data",
+    "permanova_da_results", "permanova_da_tpr",
     "pred_data", "lm_fit"
   ),
   ls()
