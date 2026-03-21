@@ -20,7 +20,7 @@ Below is a brief summary of the files present in this repository.
 
 | File | Description |
 |------|-------------|
-| `bd_benchmark_paper_analyses.qmd` | Main Quarto report producing paper figures: compares PERMDISP distance inputs (Bray–Curtis, Aitchison, robust Aitchison, Jaccard, Hellinger), plots sensitivity under pure differential overdispersion, specificity under pure differential abundance, and sensitivity–specificity trade-offs |
+| `benchmark_paper_analyses.qmd` | Main Quarto report producing paper figures: compares PERMDISP distance inputs (Bray–Curtis, Aitchison, robust Aitchison, Jaccard, Hellinger), plots sensitivity under pure differential overdispersion, specificity under pure differential abundance, and sensitivity–specificity trade-offs |
 | `Supplementary_figure_report.qmd` | Supplementary figures and diagnostics from targets outputs |
 | `figure_1.png` | Main paper Figure 1 |
 | `figure_2.png` | Main paper Figure 2 |
@@ -34,7 +34,7 @@ Below is a brief summary of the files present in this repository.
 
 The pipeline requires `HMP2_sccomp_results.rds` in the project root, an sccomp fit to the HMP2 gut microbiome dataset (Healthy vs IBD).
 
-**Recommended (automatic)**: When you render `bd_benchmark_paper_analyses.qmd`, the report automatically downloads this file from [Zenodo (10.5281/zenodo.19144244)](https://zenodo.org/records/19144244) if it is not already present.
+**Recommended (automatic)**: When you render `benchmark_paper_analyses.qmd`, the report automatically downloads this file from [Zenodo (10.5281/zenodo.19144244)](https://zenodo.org/records/19144244) if it is not already present.
 
 **Manual download**: You can also download it directly to the project root:
 
@@ -80,7 +80,7 @@ On macOS, the pipeline uses local parallelism (8 workers). On Linux with SLURM, 
 ### 4. Render the main and supplementary reports
 
 ```bash
-quarto render bd_benchmark_paper_analyses.qmd
+quarto render benchmark_paper_analyses.qmd
 quarto render Supplementary_figure_report.qmd
 ```
 
