@@ -105,7 +105,7 @@ library(sccomp)
 library(ggrepel)
 library(lme4)
 
-source("simulate_compositional_bb.R")
+source("functions.R")
 source("utils_proportion_transform.R")
 
 knitr::opts_chunk$set(
@@ -513,7 +513,7 @@ plot_alpha_diversity_scatter <- function(sim_result, case_label = "Case") {
   # Default color values (will be overridden if scale_color_manual is applied after)
   color_vals <- c("non-IBD" = "#E74C3C", "IBD" = "#3498DB")
   # Update plot to use theme_multipanel and remove titles/subtitles
-  # Note: stat_ellipse linewidth is set in simulate_compositional_bb.R
+  # Note: stat_ellipse linewidth is set in functions.R
   # Add marginal densities using ggside (fill will inherit from color scale if overridden)
   # Override point size to match boxplots (run_alpha_diversity_analysis uses size = 0.1)
   alpha$plot +
@@ -738,7 +738,7 @@ suppressPackageStartupMessages({
   library(vegan)
 })
 
-source("simulate_compositional_bb.R")
+source("functions.R")
 source("utils_proportion_transform.R")
 
 utils::globalVariables(c(
