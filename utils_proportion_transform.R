@@ -54,56 +54,6 @@ residual_subtract <- function(observed, expected) {
   observed - expected
 }
 
-#' Adjust residuals for a mean–dispersion association in unconstrained space
-#'
-#' We assume a (slope-only) association in unconstrained log-linear predictor space:
-#' \deqn{\log(\sigma_{\text{rel}}) = -k \cdot \mu}
-#'
-#' and scale residuals by:
-#' \deqn{r^* = r / \sqrt{\sigma_{\text{rel}}}}
-#'
-#' where:
-#' - \eqn{r} is a residual on any chosen scale (e.g. arcsin–sqrt),
-#' - \eqn{\mu} is the unconstrained log-linear predictor ("mu_inv_softmax"),
-#' - \eqn{k} is `log_dispersion_assoc`.
-#'
-#' This is intentionally **independent** of how residuals were constructed.
-#'
-#' @param residual numeric vector/matrix of residuals (any scale).
-#' @param mu_inv_softmax numeric vector/matrix of unconstrained log-linear predictors.
-#'   Must be conformable with `residual` (same length or same dimensions).
-#' @param log_dispersion_assoc numeric scalar `k` in log(sigma) = -k * mu + c.
-#'   Only the slope is used here (intercept intentionally excluded).
-#' @param clamp_log_sigma_rel optional numeric length-2 vector giving bounds for
-#'   log(sigma_rel) to prevent overflow (e.g. c(-30, 30)). Default NULL = no clamp.
-#'
-#' @return residual adjusted for the mean–dispersion association.
-adjust_residual_assoc <- function(
-  residual,
-  mu_inv_softmax,
-  log_dispersion_assoc,
-  clamp_log_sigma_rel = NULL
-) {
-  if (!is.numeric(residual)) stop("residual must be numeric.")
-  if (!is.numeric(mu_inv_softmax)) stop("mu_inv_softmax must be numeric.")
-  if (!is.numeric(log_dispersion_assoc) || length(log_dispersion_assoc) != 1) {
-    stop("log_dispersion_assoc must be a numeric scalar.")
-  }
-
-  log_sigma_rel <- -log_dispersion_assoc * mu_inv_softmax
-
-  if (!is.null(clamp_log_sigma_rel)) {
-    if (!is.numeric(clamp_log_sigma_rel) || length(clamp_log_sigma_rel) != 2) {
-      stop("clamp_log_sigma_rel must be a numeric vector of length 2, e.g. c(-30, 30).")
-    }
-    log_sigma_rel <- pmax(log_sigma_rel, clamp_log_sigma_rel[1])
-    log_sigma_rel <- pmin(log_sigma_rel, clamp_log_sigma_rel[2])
-  }
-
-  sigma_rel <- exp(log_sigma_rel)
-  residual / sqrt(sigma_rel)
-}
-
 #' Translate residuals back to a group/taxon expected location
 #'
 #' This is the "add the centroid back" step:
@@ -148,24 +98,6 @@ sigma_to_rho <- function(sigma) {
   eps <- 1e-12
   rho <- pmax(pmin(rho, 1 - eps), eps)
   rho
-}
-
-#' Approximate SD on arcsin-sqrt scale under beta-binomial sampling
-#'
-#' For proportions \eqn{\hat p = X/N} with beta-binomial overdispersion \eqn{\rho},
-#' a delta-method approximation gives:
-#' \deqn{\mathrm{Var}(\arcsin\sqrt{\hat p}) \approx (1 + (N-1)\rho)/(4N)}
-#'
-#' @param library_size numeric vector of N (> 0)
-#' @param rho numeric vector of rho in (0, 1)
-#' @return numeric vector SD on arcsin-sqrt scale
-bb_arcsin_sqrt_sd <- function(library_size, rho) {
-  if (!is.numeric(library_size)) stop("library_size must be numeric.")
-  if (any(library_size <= 0, na.rm = TRUE)) stop("library_size must be > 0.")
-  if (!is.numeric(rho)) stop("rho must be numeric.")
-  if (any(rho <= 0 | rho >= 1, na.rm = TRUE)) stop("rho must be in (0, 1).")
-
-  sqrt((1 + (library_size - 1) * rho) / (4 * library_size))
 }
 
 #' Beta-binomial variance of the sample proportion p_hat = X/N
