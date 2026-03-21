@@ -642,22 +642,14 @@ coerce_method_levels <- function(x) {
 ```{r download-sccomp-results-if-needed}
 #| include: false
 #| cache: false
-#| eval: false
 
-library(googledrive)
+# HMP2 sccomp fit from Zenodo (10.5281/zenodo.19144244)
+sccomp_file_path <- "HMP2_sccomp_results.rds"
+zenodo_url <- "https://zenodo.org/records/19144244/files/HMP2_sccomp_results.rds?download=1"
 
-# Google Drive file ID - replace "YOUR_FILE_ID_HERE" with your actual file ID
-# To get the file ID: open file in Google Drive, click Share, copy link
-# Extract the ID from: https://drive.google.com/file/d/FILE_ID/view
-sccomp_gdrive_id <- "1tc9nZ3hZMHeO3UivjakbiNwjKjnxc1lU"  # <-- Replace this with your file ID
-sccomp_file_path <- "lejing_data/microbiome_sccomp_results.rds"
-
-# Create directory and download
-dir.create(dirname(sccomp_file_path), recursive = TRUE, showWarnings = FALSE)
-
-# Re-authenticate with full drive scope to fix permission issues
-drive_auth(scopes = "https://www.googleapis.com/auth/drive.readonly")
-drive_download(as_id(sccomp_gdrive_id), path = sccomp_file_path, overwrite = TRUE)
+if (!file.exists(sccomp_file_path)) {
+  download.file(zenodo_url, sccomp_file_path, mode = "wb")
+}
 ```
 
 ```{r targets-run}
@@ -1595,7 +1587,7 @@ summarise_permanova_tpr <- function(permanova_results) {
 list(
   tar_target(
     sccomp_result_file,
-    "lejing_data/microbiome_sccomp_results.rds",
+    "HMP2_sccomp_results.rds",
     format = "file"
   ),
   tar_target(
@@ -2028,7 +2020,7 @@ This approach ensures our simulation sweeps reflect:
 
 ```{r load-sccomp-results, cache: false}
 # Load the sccomp results
-result <- readRDS("lejing_data/microbiome_sccomp_results.rds")
+result <- readRDS("HMP2_sccomp_results.rds")
 
 # Extract fit object
 fit <- attr(result, "fit")
@@ -2688,7 +2680,7 @@ This figure shows method performance on filtered simulated data (taxa with mean 
 ```{r case-4.5-load-params}
 # Load HMP2 parameters for Figure 2 (Setting DO_no_sd)
 # Load the sccomp results
-result_case4_5 <- readRDS("lejing_data/microbiome_sccomp_results.rds")
+result_case4_5 <- readRDS("HMP2_sccomp_results.rds")
 
 # Extract fit object
 fit_case4_5 <- attr(result_case4_5, "fit")
