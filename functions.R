@@ -1,28 +1,14 @@
-# Simulate Compositional Beta-Binomial Dataset
-# 
-# This script simulates compositional count data (e.g., microbiome) where:
-# - Counts follow beta-binomial distribution
-# - Means are compositional (inverse softmax of linear predictors)
-# - Log-dispersion (sigma) is inversely proportional to logit-mean (sccomp-style)
-# - There's variability around the mean-dispersion relationship
+# =============================================================================
+# functions.R - Simulation and Beta-Dispersion Analysis for Compositional Data
+# =============================================================================
 #
-# Parameters:
-# - slope_vector: Vector of slopes for each taxon (length = n_taxa)
-# - inv_softmax_mean: Intercept for inverse softmax mean (scalar)
-# - log_dispersion_assoc: Association parameter k in log(σ) = -k·logit(μ) + c
-# - n_taxa: Number of taxa/species
-# - n_samples: Number of samples
-# - sd_log_overdispersion: SD of log(sigma) around the regression line
+# This file provides functions for simulating compositional count data (e.g.,
+# microbiome) and building association-adjusted distance matrices for beta-
+# dispersion analysis (vegan::betadisper). It supports the paper:
+# "Beta dispersion lacks interpretability for differential stochastic dispersion
+# analyses" (beta-dispersion interpretability project).
 #
-# Dependencies:
-# - ggplot2 (for visualization)
-# - dplyr (for data manipulation)
-# - purrr (for functional programming)
-# - tibble (for tibble data structures)
-# - VGAM (for beta-binomial simulation and fitting)
-#   Alternative packages for beta-binomial simulation:
-#   - extraDistr::rbbinom()
-#   - emdbook::rbetabinom()
+# =============================================================================
 
 library(ggplot2)
 library(dplyr)
@@ -33,27 +19,33 @@ library(tibble)
 # Helper Functions
 # ============================================================================
 
-# Softmax: converts log-linear predictors to probabilities
-# Given log-linear predictors, exponentiates and normalizes to sum to 1
-# Note: This is the standard softmax operation, NOT inverse softmax
-# Inverse softmax would be: probabilities -> log-linear predictors (centered log-ratio)
+#' Softmax: convert log-linear predictors to compositional probabilities
+#'
+#' Exponentiates and normalizes so each row sums to 1. Used to map design-
+#' matrix effects to taxon proportions. This is the standard softmax (not
+#' inverse softmax / centered log-ratio).
+#'
+#' @param log_linear_predictors Matrix (n_samples x n_taxa) of log-space values.
+#' @return Matrix of probabilities (n_samples x n_taxa), rows sum to 1.
 softmax <- function(log_linear_predictors) {
-  # log_linear_predictors: matrix of size (n_samples x n_taxa) in log space
-  # Returns: matrix of probabilities (n_samples x n_taxa) that sum to 1 per row
-  exp_log <- exp(log_linear_predictors)  # Exponentiate (back to regular space)
+  exp_log <- exp(log_linear_predictors)
   row_sums <- rowSums(exp_log)
-  probabilities <- exp_log / row_sums    # Normalize so each row sums to 1
+  probabilities <- exp_log / row_sums
   return(probabilities)
 }
 
-# Simulate beta-binomial counts
+#' Simulate beta-binomial counts
+#'
+#' Draws counts from BetaBinom(size=n, mu, sigma) using VGAM. Higher sigma
+#' implies more overdispersion relative to binomial.
+#'
+#' @param n Number of trials (library size).
+#' @param mu Mean probability in (0, 1).
+#' @param sigma Dispersion parameter (higher = more overdispersion).
+#' @param n_sim Number of draws (default 1).
+#' @return Numeric vector of counts (length n_sim).
 simulate_beta_binomial <- function(n, mu, sigma, n_sim = 1) {
-  # n: number of trials (library size)
-  # mu: mean probability
-  # sigma: dispersion parameter (higher = more overdispersion)
-  # n_sim: number of simulations
-  
-  # Convert dispersion to concentration: concentration = 1/sigma
+  # Concentration kappa = 1/sigma; alpha = mu*kappa, beta = (1-mu)*kappa
   # Higher dispersion → Lower concentration → More overdispersion
   concentration <- 1 / sigma
   
@@ -71,17 +63,18 @@ simulate_beta_binomial <- function(n, mu, sigma, n_sim = 1) {
   return(counts)
 }
 
-# Calculate standard deviation from unconstrained mu and overdispersion
+#' Standard deviation of beta-binomial proportion from overdispersion
+#'
+#' Computes SD of p_hat = X/n under BetaBinom(n, mu, overdispersion). Supports
+#' sigma (dispersion), factor (n+kappa)/(kappa+1), or ratio (Var/Var_binomial).
+#'
+#' @param mu Mean probability in (0, 1).
+#' @param overdispersion Overdispersion parameter (interpretation by type).
+#' @param n Number of trials.
+#' @param overdispersion_type One of "sigma", "factor", "ratio".
+#' @return Numeric scalar SD.
 calculate_sd_from_overdispersion <- function(mu, overdispersion, n, 
                                             overdispersion_type = c("sigma", "factor", "ratio")) {
-  # mu: unconstrained mean probability (0 < mu < 1)
-  # overdispersion: overdispersion parameter (interpretation depends on type)
-  # n: number of trials
-  # overdispersion_type: type of overdispersion parameter
-  #   - "sigma": dispersion parameter σ (higher = more overdispersion)
-  #   - "factor": overdispersion factor (n + κ) / (κ + 1) where κ = 1/σ
-  #   - "ratio": overdispersion ratio Var / Var_binomial
-  
   overdispersion_type <- match.arg(overdispersion_type)
   
   # Calculate concentration (κ) based on overdispersion type
@@ -130,21 +123,19 @@ calculate_sd_from_overdispersion <- function(mu, overdispersion, n,
   return(sd)
 }
 
-# Convenience wrapper functions
+#' @describeIn calculate_sd_from_overdispersion Wrapper using sigma (dispersion).
 calculate_sd_from_sigma <- function(mu, sigma, n) {
-  # Wrapper for sigma (dispersion) parameter
-  # sigma: dispersion parameter (higher = more overdispersion)
   return(calculate_sd_from_overdispersion(mu, sigma, n, overdispersion_type = "sigma"))
 }
 
+#' @describeIn calculate_sd_from_overdispersion Wrapper using overdispersion factor.
 calculate_sd_from_overdispersion_factor <- function(mu, overdispersion_factor, n) {
-  # Wrapper for overdispersion factor
   return(calculate_sd_from_overdispersion(mu, overdispersion_factor, n, 
                                           overdispersion_type = "factor"))
 }
 
+#' @describeIn calculate_sd_from_overdispersion Wrapper using overdispersion ratio.
 calculate_sd_from_overdispersion_ratio <- function(mu, overdispersion_ratio, n) {
-  # Wrapper for overdispersion ratio
   return(calculate_sd_from_overdispersion(mu, overdispersion_ratio, n, 
                                           overdispersion_type = "ratio"))
 }
@@ -153,6 +144,24 @@ calculate_sd_from_overdispersion_ratio <- function(mu, overdispersion_ratio, n) 
 # Main Simulation Function
 # ============================================================================
 
+#' Simulate compositional beta-binomial count data
+#'
+#' Generates microbiome-like count data where: (1) compositional means come
+#' from softmax of log-linear predictors (design_matrix %*% coeffs); (2) counts
+#' are beta-binomial with mean-dispersion association log(sigma) = -k*logit(mu)
+#' + c + N(0, sd^2); (3) library sizes vary per sample.
+#'
+#' @param slope_vector Length-n_taxa slopes (must sum to 0). Group/covariate effect per taxon.
+#' @param mu_inv_softmax Length-n_taxa baseline log-predictors (must sum to 0).
+#' @param log_dispersion_assoc Scalar k in log(sigma) = -k*logit(mu) + c.
+#' @param n_taxa Number of taxa.
+#' @param n_samples Total samples (split by design).
+#' @param sd_log_overdispersion SD of log(sigma) noise (taxon-level heterogeneity).
+#' @param intercept_dispersion Scalar or per-cohort intercept c. Higher = more overdispersion.
+#' @param library_size_mean,library_size_sd Library size distribution.
+#' @param design_matrix Optional; default intercept + one group covariate.
+#' @param seed Optional random seed.
+#' @return List with count_long, sample_metadata, ground_truth_params, cohort matrices, etc.
 simulate_compositional_bb <- function(
   slope_vector,           # Vector of slopes for each taxon (length = n_taxa)
                           # Determines how each taxon responds to covariates
@@ -511,7 +520,13 @@ simulate_compositional_bb <- function(
 # Visualization Functions
 # ============================================================================
 
-# Plot mean-dispersion relationship
+#' Plot mean-dispersion relationship from simulation output
+#'
+#' Scatter of log(sigma) vs logit(mu) with fitted regression line. Visualizes
+#' the inverse mean-dispersion association and residual heterogeneity.
+#'
+#' @param sim_result Output from simulate_compositional_bb.
+#' @return ggplot object.
 plot_mean_dispersion_relationship <- function(sim_result) {
   df <- sim_result$count_long %>%
     mutate(
@@ -535,9 +550,14 @@ plot_mean_dispersion_relationship <- function(sim_result) {
   return(p)
 }
 
-# Plot compositional abundances
+#' Plot stacked compositional abundances (bar chart)
+#'
+#' Shows proportion of each taxon per sample for a subset of samples.
+#'
+#' @param sim_result Output from simulate_compositional_bb.
+#' @param n_samples_plot Number of samples to show (default 20).
+#' @return ggplot object.
 plot_compositional_abundances <- function(sim_result, n_samples_plot = 20) {
-  # Calculate proportions
   count_long <- sim_result$count_long %>%
     group_by(sample_id) %>%
     mutate(proportion = count / sum(count)) %>%
@@ -566,7 +586,13 @@ plot_compositional_abundances <- function(sim_result, n_samples_plot = 20) {
   return(p)
 }
 
-# Plot sigma distribution by taxon
+#' Plot mean sigma (dispersion) by taxon with error bars
+#'
+#' Summarizes dispersion per taxon across samples. Useful for checking
+#' taxon-level heterogeneity in overdispersion.
+#'
+#' @param sim_result Output from simulate_compositional_bb.
+#' @return ggplot object.
 plot_sigma_by_taxon <- function(sim_result) {
   df <- sim_result$count_long %>%
     group_by(taxon_id) %>%
@@ -597,18 +623,34 @@ plot_sigma_by_taxon <- function(sim_result) {
 }
 
 # ============================================================================
-# Invariant beta-dispersion helpers (report utilities)
+# Association-Adjusted Distance Builders (for vegan::betadisper)
+# ============================================================================
+#
+# All build_*_betadisper_inputs functions return list(dist, group) suitable for
+# vegan::betadisper(dist, group). They compute distance matrices that account
+# for the mean-dispersion association (rare taxa have higher variance). Without
+# adjustment, standard distances conflate differential abundance with differential
+# dispersion.
+#
+# Variants:
+# - build_assoc_adjusted_*: Arcsin-sqrt residuals scaled by sigma ratio (slope-only or pi-aware)
+# - build_assoc_adjusted_piaware_*: Uses beta-binomial variance (delta method) for scaling
+# - postmean: Regularizes p_hat with posterior mean under Beta prior (avoids 0/1 boundary)
+# - postmeanT: Posterior mean on arcsin-sqrt scale (count-dependent shrinkage)
+# - prevfilter / highprevfilter: Drops low-prevalence taxa before distance
+# - Hellinger: Uses sqrt(p) transform instead of arcsin-sqrt
+# - build_standard_*: Conventional distances (Bray, Aitchison, etc.) for comparison
+#
 # ============================================================================
 
-# Build the association-adjusted distance matrix and aligned group factor.
-#
-# This encapsulates the report pipeline:
-# 1) compute transformed residuals (arcsin-sqrt by default),
-# 2) scale residuals by the mean–dispersion association (slope-only),
-# 3) translate residuals by group×taxon expected location (centroid),
-# 4) return (distance, group_factor) for vegan::betadisper().
-#
-# Returns a list of length 2: $dist, $group
+#' Association-adjusted arcsin-sqrt distance (non-pi-aware)
+#'
+#' Core method: arcsin-sqrt residuals scaled by sigma ratio from mean-dispersion
+#' association. Does not use beta-binomial variance (pi-aware); scaling uses
+#' slope-only adjust_residual_assoc_arcsin_bb. Requires count_long with mu,
+#' unconstrained_log_mu. Returns list(dist, group) for vegan::betadisper.
+#'
+#' Pipeline: arcsin-sqrt residuals -> scale by sigma ratio -> add centroid -> Euclidean dist.
 build_assoc_adjusted_betadisper_inputs <- function(
   count_long,
   log_dispersion_assoc,
@@ -690,13 +732,12 @@ build_assoc_adjusted_betadisper_inputs <- function(
   list(dist = dist_obj, group = group_factor)
 }
 
-# Build pi-aware association-adjusted arcsin-sqrt distance + aligned group factor.
-#
-# Option A: pi-aware diagonal scaling (second-order delta method).
-# Residuals are in arcsin-sqrt space; scaling uses both sigma(mu) and pi via
-# a pi-aware SD approximation. Centroid is then added back (same as assoc_adj).
-#
-# Returns: list(dist, group)
+#' Pi-aware association-adjusted arcsin-sqrt distance
+#'
+#' Like build_assoc_adjusted_betadisper_inputs but uses beta-binomial variance
+#' (delta method) for residual scaling: sd0/sd_exp from bb_arcsin_sqrt_sd_piaware.
+#' Better calibrated when library size and mean vary. Requires mu, unconstrained_log_mu.
+#' Returns list(dist, group) for vegan::betadisper.
 build_assoc_adjusted_piaware_betadisper_inputs <- function(
   count_long,
   log_dispersion_assoc,
@@ -1866,9 +1907,17 @@ build_assoc_adjusted_piaware_hellinger_highprevfilter_raw_betadisper_inputs <- f
   )
 }
 
-# Build standard Bray–Curtis distance + aligned group factor for betadisper.
-#
-# Returns a list of length 2: $dist, $group
+#' Standard distance matrix for betadisper (Bray-Curtis, Aitchison, etc.)
+#'
+#' Uses vegan::vegdist (or decostand + dist for Hellinger). No association
+#' adjustment; useful as baseline comparison. Supports "bray", "aitchison",
+#' "robust.aitchison", "jaccard", "hellinger".
+#'
+#' @param count_long Long-format counts (sample_id, taxon_id, count).
+#' @param sample_metadata Must have sample_id, group.
+#' @param distance_method One of bray, aitchison, robust.aitchison, jaccard, hellinger.
+#' @param group_levels Factor levels for group.
+#' @return list(dist, group) for vegan::betadisper.
 build_standard_betadisper_inputs <- function(
   count_long,
   sample_metadata,
@@ -1907,15 +1956,17 @@ build_standard_betadisper_inputs <- function(
   list(dist = dist_obj, group = group_factor)
 }
 
-# Build arcsin-sqrt residuals, then add back group×taxon centroid location.
-#
-# Motivation (paper figures):
-# - Pure residuals (obs - expected) can visually overlap across groups in PCoA,
-#   because the group-level location is removed by construction.
-# - Adding back a constant centroid term per group×taxon shifts group centroids
-#   without changing within-group dispersion in Euclidean space.
-#
-# Returns a list of length 2: $dist, $group
+#' Arcsin-sqrt residual distance with group centroid restored
+#'
+#' Computes r_ij = asin(sqrt(p_hat)) - asin(sqrt(mu)), then adds back the
+#' group×taxon centroid so groups separate in PCoA. Preserves within-group
+#' dispersion; used for residual-based beta-dispersion without association
+#' adjustment. Requires count_long with mu (e.g. from simulation).
+#'
+#' @param count_long Long-format with sample_id, taxon_id, count, library_size, mu.
+#' @param sample_metadata Must have sample_id, group.
+#' @param group_levels Factor levels.
+#' @return list(dist, group) for vegan::betadisper.
 build_arcsin_residual_with_location_betadisper_inputs <- function(
   count_long,
   sample_metadata,
@@ -1979,6 +2030,16 @@ build_arcsin_residual_with_location_betadisper_inputs <- function(
   list(dist = dist_obj, group = group_factor)
 }
 
+#' Alpha diversity analysis (richness, Shannon, evenness) with group comparison
+#'
+#' Computes richness (observed taxa), Shannon entropy, and Pielou evenness per
+#' sample. Summarizes by group and runs t-tests. Returns a list with summary
+#' table, tests, plot (PCoA of alpha metrics with stat_ellipse), and raw alpha_data.
+#'
+#' @param sim_result Output from simulate_compositional_bb.
+#' @param case_label Label for plot title.
+#' @param group_levels Factor levels for group (default c("non-IBD", "IBD")).
+#' @return List with summary_tbl, tests, plot, alpha_data.
 run_alpha_diversity_analysis <- function(
   sim_result,
   case_label = "Case",
