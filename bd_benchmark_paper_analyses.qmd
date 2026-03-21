@@ -581,16 +581,6 @@ plot_mean_dispersion_scatter <- function(sim_result, case_label = "Case", cols =
     )
 }
 
-detect_n_cores <- function(n_cores = NULL) {
-  if (is.null(n_cores)) {
-    n_cores_available <- parallelly::availableCores()
-    n_cores <- max(1L, n_cores_available - 1L) # leave 1 core free
-  }
-  as.integer(max(1L, min(n_cores, parallelly::availableCores())))
-}
-
-
-
 # Distance input helpers live in `_targets.R` (analysis only).
 
 # Method label functions
@@ -1000,35 +990,6 @@ build_standard_betadisper_inputs_paper <- function(
   list(dist = dist_obj, group = group_factor)
 }
 
-simulate_case_small_taxa <- function(
-  slope_vector,
-  mu_inv_softmax,
-  log_dispersion_assoc,
-  intercept_dispersion,
-  sd_log_overdispersion,
-  seed,
-  n_taxa = 15,
-  n_samples_per_group = 100,
-  library_size_mean = 30000,
-  library_size_sd = 6000
-) {
-  n_groups <- 2
-  n_samples <- n_samples_per_group * n_groups
-  simulate_compositional_bb( # nolint
-    slope_vector = slope_vector,
-    mu_inv_softmax = mu_inv_softmax,
-    log_dispersion_assoc = log_dispersion_assoc,
-    n_taxa = n_taxa,
-    n_samples = n_samples,
-    sd_log_overdispersion = sd_log_overdispersion,
-    intercept_dispersion = intercept_dispersion,
-    library_size_mean = library_size_mean,
-    library_size_sd = library_size_sd,
-    design_matrix = design_matrix_from_groups(n_samples_per_group),
-    seed = seed
-  )
-}
-
 simulate_case_realistic_taxa <- function(
   slope_vector,
   mu_inv_softmax,
@@ -1056,17 +1017,6 @@ simulate_case_realistic_taxa <- function(
     design_matrix = design_matrix_from_groups(n_samples_per_group),
     seed = seed
   )
-}
-
-create_slope_vector <- function(n_da, seed, n_taxa, slope_effects_significant) {
-  set.seed(seed)
-  slope_vec <- rep(0, n_taxa)
-  if (n_da > 0) {
-    da_indices <- sample(1:n_taxa, size = min(n_da, n_taxa), replace = FALSE)
-    slope_vec[da_indices] <- sample(slope_effects_significant, length(da_indices), replace = TRUE)
-    slope_vec <- slope_vec - mean(slope_vec)
-  }
-  slope_vec
 }
 
 filter_by_abundance_cases <- function(count_long, threshold = NULL) {
@@ -1527,214 +1477,6 @@ run_analysis_job <- function(
       )
     })
   }
-}
-
-run_da_taxa_job <- function(
-  job_row,
-  intercept_dispersion,
-  mu_base,
-  k_fixed,
-  slope_effects_distribution,
-  sd_log_overdispersion,
-  n_taxa,
-  n_samples,
-  n_samples_per_group,
-  library_size_mean,
-  library_size_sd
-) {
-  # Run simulation
-  sim_r <- run_simulation_job(
-    job_row = job_row,
-    intercept_dispersion = intercept_dispersion,
-    mu_base = mu_base,
-    k_fixed = k_fixed,
-    slope_effects_distribution = slope_effects_distribution,
-    sd_log_overdispersion = sd_log_overdispersion,
-    n_taxa = n_taxa,
-    n_samples = n_samples,
-    n_samples_per_group = n_samples_per_group,
-    library_size_mean = library_size_mean,
-    library_size_sd = library_size_sd
-  )
-  
-  # Run analysis (uses adaptive permutations with default parameters)
-  fpr_results <- run_analysis_job(sim_r = sim_r)
-  
-  list(
-    fpr = fpr_results,
-    simulation = sim_r
-  )
-}
-
-run_da_taxa_job_filtered <- function(
-  job_row,
-  intercept_dispersion,
-  mu_base,
-  k_fixed,
-  slope_effects_distribution,
-  sd_log_overdispersion,
-  n_taxa,
-  n_samples,
-  n_samples_per_group,
-  library_size_mean,
-  library_size_sd,
-  perm_reps_auc,
-  abundance_threshold
-) {
-  standard_distance_methods <- c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
-  group_levels <- c("non-IBD", "IBD")
-
-  # Normalize job_row to data.frame to handle serialization issues
-  if (is.null(job_row)) {
-    stop("job_row is NULL")
-  }
-  
-  # Convert to data.frame if needed (handles tibbles, lists, etc.)
-  if (!is.data.frame(job_row)) {
-    tryCatch({
-      job_row <- as.data.frame(job_row)
-    }, error = function(e) {
-      stop("Could not convert job_row to data.frame. Class: ", paste(class(job_row), collapse=", "), ". Error: ", e$message)
-    })
-  }
-  
-  if (is.data.frame(job_row)) {
-    if (nrow(job_row) == 0) {
-      stop("job_row is an empty data.frame")
-    }
-    # Handle nested column names (e.g., "X2.seed" instead of "seed")
-    seed_col <- NULL
-    n_da_col <- NULL
-    
-    if ("seed" %in% names(job_row)) {
-      seed_col <- "seed"
-    } else {
-      # Look for nested column names like "X2.seed", "X1.seed", etc.
-      seed_cols <- grep("^X\\d+\\.seed$|seed$", names(job_row), value = TRUE)
-      if (length(seed_cols) > 0) {
-        seed_col <- seed_cols[1]
-      }
-    }
-    
-    if ("n_da_taxa" %in% names(job_row)) {
-      n_da_col <- "n_da_taxa"
-    } else {
-      # Look for nested column names
-      n_da_cols <- grep("^X\\d+\\.n_da_taxa$|n_da_taxa$", names(job_row), value = TRUE)
-      if (length(n_da_cols) > 0) {
-        n_da_col <- n_da_cols[1]
-      }
-    }
-    
-    if (is.null(seed_col)) {
-      stop("job_row missing 'seed' column. Available columns: ", paste(names(job_row), collapse=", "))
-    }
-    if (is.null(n_da_col)) {
-      stop("job_row missing 'n_da_taxa' column. Available columns: ", paste(names(job_row), collapse=", "))
-    }
-    
-    seed_val <- job_row[[seed_col]][1]
-    n_da_val <- job_row[[n_da_col]][1]
-    if (is.null(seed_val) || length(seed_val) == 0 || is.na(seed_val)) {
-      stop("Could not extract seed from job_row: ", deparse(seed_val))
-    }
-    if (is.null(n_da_val) || length(n_da_val) == 0 || is.na(n_da_val)) {
-      stop("Could not extract n_da_taxa from job_row: ", deparse(n_da_val))
-    }
-    seed <- as.numeric(seed_val)
-    n_da <- as.integer(n_da_val)
-  } else if (is.list(job_row)) {
-    # Handle case where tibble was converted to list during serialization
-    # Check if it has tibble-like structure (seed and n_da_taxa as vectors)
-    if ("seed" %in% names(job_row) && "n_da_taxa" %in% names(job_row)) {
-      seed_val <- job_row$seed
-      n_da_val <- job_row$n_da_taxa
-      # If they're vectors, take first element
-      if (length(seed_val) > 0) seed_val <- seed_val[1]
-      if (length(n_da_val) > 0) n_da_val <- n_da_val[1]
-      seed <- as.numeric(seed_val)
-      n_da <- as.integer(n_da_val)
-    } else {
-      # Try to convert back to data.frame if possible
-      tryCatch({
-        job_df <- as.data.frame(job_row)
-        if ("seed" %in% names(job_df) && "n_da_taxa" %in% names(job_df)) {
-          seed <- as.numeric(job_df$seed[1])
-          n_da <- as.integer(job_df$n_da_taxa[1])
-        } else {
-          stop("job_row list missing 'seed' or 'n_da_taxa'. Available names: ", paste(names(job_row), collapse=", "))
-        }
-      }, error = function(e) {
-        stop("job_row list missing 'seed' or 'n_da_taxa'. Available names: ", paste(names(job_row), collapse=", "), ". Error: ", e$message)
-      })
-    }
-  } else {
-    stop("job_row must be a data.frame or list, got: ", paste(class(job_row), collapse=", "))
-  }
-  
-  # Final validation
-  if (is.na(seed) || length(seed) == 0) {
-    stop("seed is invalid after extraction: ", deparse(seed))
-  }
-  if (is.na(n_da) || length(n_da) == 0) {
-    stop("n_da_taxa is invalid after extraction: ", deparse(n_da))
-  }
-
-  # Ensure slope_effects_distribution is not empty
-  if (length(slope_effects_distribution) == 0) {
-    stop("slope_effects_distribution is empty - cannot sample from empty vector")
-  }
-
-  slope_vec <- rep(0, n_taxa)
-  if (n_da > 0) {
-    set.seed(seed + 10000)
-    da_indices <- sample(1:n_taxa, size = min(n_da, n_taxa), replace = FALSE)
-    slope_vec[da_indices] <- sample(slope_effects_distribution, length(da_indices), replace = TRUE)
-    slope_vec <- slope_vec - mean(slope_vec)
-  }
-
-  sim_r <- simulate_compositional_bb( # nolint
-    slope_vector = slope_vec,
-    mu_inv_softmax = mu_base,
-    log_dispersion_assoc = k_fixed,
-    n_taxa = n_taxa,
-    n_samples = n_samples,
-    sd_log_overdispersion = sd_log_overdispersion,
-    intercept_dispersion = intercept_dispersion,
-    library_size_mean = library_size_mean,
-    library_size_sd = library_size_sd,
-    design_matrix = design_matrix_from_groups(n_samples_per_group),
-    seed = seed
-  )
-  sim_r$count_long <- filter_by_abundance_cases(sim_r$count_long, threshold = abundance_threshold)
-
-  inputs_std <- purrr::set_names(
-    lapply(standard_distance_methods, \(dm) {
-      build_standard_betadisper_inputs_paper(
-        count_long = sim_r$count_long,
-        sample_metadata = sim_r$sample_metadata,
-        distance_method = dm,
-        group_levels = group_levels
-      )
-    }),
-    nm = paste0("permdisp_", standard_distance_methods)
-  )
-
-  fpr_results <- purrr::imap_dfr(inputs_std, \(inp, method_key) {
-    bd <- vegan::betadisper(inp$dist, inp$group)
-    p <- permutest_betadisper_fixed(bd, permutations = perm_reps_auc)$p_value
-    tibble::tibble(
-      seed = seed,
-      n_da_taxa = n_da,
-      method = pretty_method_label_roc(method_key),
-      p_value = p
-    )
-  })
-  
-  list(
-    fpr = fpr_results,
-    simulation = sim_r
-  )
 }
 
 summarise_fpr <- function(sweep_results) {
@@ -2918,10 +2660,6 @@ get_sweep_index <- function(jobs, seed, n_da_taxa) {
   idx
 }
 
-get_sweep_analysis <- function(sweep_res, jobs, seed, n_da_taxa) {
-  sweep_res[[get_sweep_index(jobs, seed, n_da_taxa)]]
-}
-
 get_sweep_index_with_threshold <- function(jobs_with_threshold, seed, n_da_taxa, threshold) {
   idx <- which(jobs_with_threshold$seed == seed & 
                jobs_with_threshold$n_da_taxa == n_da_taxa & 
@@ -2934,25 +2672,6 @@ get_sweep_index_with_threshold <- function(jobs_with_threshold, seed, n_da_taxa,
 
 get_sweep_analysis_with_threshold <- function(sweep_res, jobs_with_threshold, seed, n_da_taxa, threshold) {
   sweep_res[[get_sweep_index_with_threshold(jobs_with_threshold, seed, n_da_taxa, threshold)]]
-}
-
-get_sweep_sim <- function(sweep_sim, jobs, seed, n_da_taxa) {
-  sweep_sim[[get_sweep_index(jobs, seed, n_da_taxa)]]
-}
-
-analysis_to_long <- function(sweep_res) {
-  purrr::imap_dfr(sweep_res, \(x, idx) {
-    purrr::imap_dfr(x$method_results, \(mr, method_key) {
-      centroid_dist <- abs(mr$group2 - mr$group1)
-      tibble::tibble(
-        seed = x$seed,
-        n_da_taxa = x$n_da_taxa,
-        method = method_key,
-        p_value = mr$p_value,
-        centroid_dist = centroid_dist
-      )
-    })
-  })
 }
 ```
 
