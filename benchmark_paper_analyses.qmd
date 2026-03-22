@@ -2682,6 +2682,27 @@ fig_supp_2 <- (fig_supp_2_row1_new / fig_supp_2_row2_new) +
 # ggsave("Supp_Figure_2.pdf", fig_supp_2, width = 183, height = 230, units = "mm")
 ```
 
+```{r cleanup-before-no-do-section}
+# Free heavy Figure 2 objects before loading DA sweep targets in Figure 3 sections.
+# Keep fnr_sweep_realistic_taxa_filtered because it is reused in the Figure 3 scatter panel.
+rm(list = intersect(
+  c(
+    "sweep_setting_DO_no_sd_jobs", "sweep_setting_DO_no_sd_fpr",
+    "result_case4_5", "fit_case4_5", "model_input_case4_5", "intercept_effects_case4_5",
+    "sim_realistic_taxa", "sim_realistic_taxa_filtered", "analysis_realistic_taxa_filtered", "cmp_realistic_taxa_filtered",
+    "distances_non_ibd_realistic_taxa_filtered", "std_gg_realistic_taxa_filtered",
+    "alpha_plot_realistic_taxa_filtered", "disp_scatter_realistic_taxa_filtered",
+    "d_whisker_realistic_taxa_filtered", "d_whisker_realistic_taxa_all_nonfiltered",
+    "distances_non_ibd_realistic_taxa", "cmp_realistic_taxa", "analysis_realistic_taxa",
+    "p_boxplots_all_realistic_taxa_filtered", "p_boxplots_all_realistic_taxa",
+    "p_whisker_realistic_taxa_filtered", "p_whisker_realistic_taxa_all_nonfiltered",
+    "p_figure2", "fig_supp_2", "fig_supp_2_row1_new", "fig_supp_2_row2_new"
+  ),
+  ls()
+))
+invisible(gc())
+```
+
 
 # Simulation no-DO (No Differential Overdispersion)
 
@@ -2768,12 +2789,22 @@ pcoa_panel_setting_DA_no_sd_filtered <- plot_pcoa_grid_multiple_methods(
 if (is.null(pcoa_panel_setting_DA_no_sd_filtered)) {
   stop("pcoa_panel_setting_DA_no_sd_filtered is NULL after creation")
 }
+
+# Free temporary analysis objects; keep shared sweep targets for downstream chunks
+rm(list = intersect(
+  c(
+    "available_seeds", "seed_fig3_pcoa", "threshold_filtered",
+    "analysis_1_raw", "analysis_10_raw", "analysis_40_raw",
+    "analysis_1", "analysis_10", "analysis_40"
+  ),
+  ls()
+))
+invisible(gc())
 ```
 
 ```{r setting-DA-no-sd-filtered-top-panel}
 # Get FPR data for all thresholds (0.005 opaque, 0.001 lighter, 0.0 lightest)
-fpr_setting_DA_no_sd_all <- targets::tar_read("sweep_setting_DA_no_sd_fpr")
-fpr_setting_DA_no_sd_filtered <- fpr_setting_DA_no_sd_all
+fpr_setting_DA_no_sd_filtered <- targets::tar_read("sweep_setting_DA_no_sd_fpr")
 
 p_setting_DA_no_sd_filtered_fpr <- plot_da_taxa_sweep_results(
   fpr_data = fpr_setting_DA_no_sd_filtered,
@@ -2787,10 +2818,6 @@ p_setting_DA_no_sd_filtered_fpr <- plot_da_taxa_sweep_results(
   x_breaks = c(0, 10, 20, 30, 40)
 )
 
-# Combine FPR plot and PCoA plots in two columns
-p_setting_DA_no_sd_filtered_top <- (p_setting_DA_no_sd_filtered_fpr | pcoa_panel_setting_DA_no_sd_filtered) + 
-  patchwork::plot_layout(guides = "collect", widths = c(1, 1)) &
-  theme(plot.margin = margin(0, 0, 0, 0, "pt"), legend.key.size = unit(0.2, 'cm'), legend.position = "bottom")
 ```
 
 
@@ -2846,6 +2873,10 @@ p_setting_DA_no_sd_permanova_tpr <- ggplot(
     y = "True positive rate (PERMANOVA)"
   ) +
   theme_multipanel
+
+# Keep only the final ggplot object
+rm(list = intersect(c("permanova_da_tpr"), ls()))
+invisible(gc())
 ```
 
 ```{r figure-3-scatter}
@@ -2982,10 +3013,16 @@ print(fpr_fig3 %>% dplyr::arrange(method))
 ```{r figure-3-top-row}
 # Create plots for 40 DA case (Setting DA_no_sd) for top row of Figure 3
 # Use 40 DA simulation + analysis from sweep outputs (then filter for plotting)
-sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs")
+if (!exists("sweep_setting_DA_no_sd_jobs", inherits = FALSE)) {
+  sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs")
+}
 sweep_setting_DA_no_sd_sim <- targets::tar_read("sweep_setting_DA_no_sd_sim")
-sweep_setting_DA_no_sd_jobs_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_jobs_with_threshold")
-sweep_setting_DA_no_sd_res <- targets::tar_read("sweep_setting_DA_no_sd_res")
+if (!exists("sweep_setting_DA_no_sd_jobs_with_threshold", inherits = FALSE)) {
+  sweep_setting_DA_no_sd_jobs_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_jobs_with_threshold")
+}
+if (!exists("sweep_setting_DA_no_sd_res", inherits = FALSE)) {
+  sweep_setting_DA_no_sd_res <- targets::tar_read("sweep_setting_DA_no_sd_res")
+}
 # Use the same seed as PCoA plots for consistency (uses seed_idx_fig3 from figure-3-seed-selection chunk)
 available_seeds_fig3 <- unique(sweep_setting_DA_no_sd_jobs$seed)
 seed_40_da_fig3 <- available_seeds_fig3[min(seed_idx_fig3, length(available_seeds_fig3))]
@@ -3004,6 +3041,17 @@ cmp_40_da <- format_analysis_results_for_plotting(
   analysis_results = get_sweep_analysis_with_threshold(sweep_setting_DA_no_sd_res, sweep_setting_DA_no_sd_jobs_with_threshold, seed_40_da_fig3, 40, threshold_fig3),
   case_label = "Setting DA_no_sd (40 DA, filtered)"
 )
+
+# Release large sweep containers once the single 40-DA slice is materialized
+rm(list = intersect(
+  c(
+    "sweep_setting_DA_no_sd_jobs", "sweep_setting_DA_no_sd_sim",
+    "sweep_setting_DA_no_sd_jobs_with_threshold", "sweep_setting_DA_no_sd_res",
+    "available_seeds_fig3", "idx_40_da"
+  ),
+  ls()
+))
+invisible(gc())
 
 # Get top 30 most abundant taxa for whisker plot (from original unfiltered simulation)
 taxon_abundance_40_da_original <- sim_40_da$count_long %>%
@@ -3110,6 +3158,19 @@ p_boxplots_40_da <- ggplot(distances_non_ibd_40_da, aes(x = method_label, y = di
 p_figure3_row1 <- (p_whisker_40_da | alpha_plot_40_da | p_boxplots_40_da) + 
   patchwork::plot_layout(widths = c(0.35, 0.325, 0.325), guides = "collect") &
   theme(plot.margin = margin(0, 0, 0, 0, "pt"), legend.key.size = unit(0.2, 'cm'))
+
+# Drop heavy intermediates after composing the final row object
+rm(list = intersect(
+  c(
+    "sim_40_da", "sim_40_da_filtered", "cmp_40_da", "seed_40_da_fig3", "threshold_fig3",
+    "taxon_abundance_40_da_original", "top30_after_filter_40_da",
+    "arcsin_sqrt_trans_40_da", "d_whisker_40_da", "taxon_order_whisker_40_da",
+    "prop_breaks_whisker_40_da", "distances_non_ibd_40_da",
+    "p_whisker_40_da", "alpha_plot_40_da", "p_boxplots_40_da"
+  ),
+  ls()
+))
+invisible(gc())
 ```
 
 ```{r figure-3, fig.width=16, fig.height=12}
@@ -3187,6 +3248,10 @@ idx_1_da <- get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_1_da_supp, 1)
 idx_20_da <- get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_20_da_supp, 20)
 idx_40_da <- get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_40_da_supp, 40)
 
+# Job tables are no longer needed after index selection
+rm(list = intersect(c("sweep_setting_DA_no_sd_jobs", "sweep_setting_DA_sd_jobs", "available_seeds_supp"), ls()))
+invisible(gc())
+
 # Format analysis results for plotting
 analysis_DA_no_sd_1 <- format_analysis_results_for_plotting(sweep_setting_DA_no_sd_res[[idx_1_da]], case_label = "1 DA")
 analysis_DA_no_sd_20 <- format_analysis_results_for_plotting(sweep_setting_DA_no_sd_res[[idx_20_da]], case_label = "20 DA")
@@ -3195,6 +3260,10 @@ analysis_DA_no_sd_40 <- format_analysis_results_for_plotting(sweep_setting_DA_no
 analysis_DA_sd_1 <- format_analysis_results_for_plotting(sweep_setting_DA_sd_res[[idx_1_da]], case_label = "1 DA")
 analysis_DA_sd_20 <- format_analysis_results_for_plotting(sweep_setting_DA_sd_res[[idx_20_da]], case_label = "20 DA")
 analysis_DA_sd_40 <- format_analysis_results_for_plotting(sweep_setting_DA_sd_res[[idx_40_da]], case_label = "40 DA")
+
+# Large result lists are no longer needed once subset analyses are extracted
+rm(list = intersect(c("sweep_setting_DA_no_sd_res", "sweep_setting_DA_sd_res", "idx_1_da", "idx_20_da", "idx_40_da"), ls()))
+invisible(gc())
 
 pcoa_panel_setting_DA_no_sd <- plot_pcoa_grid_multiple_methods(
   analysis_list = list(analysis_DA_no_sd_1, analysis_DA_no_sd_20, analysis_DA_no_sd_40),
@@ -3205,7 +3274,21 @@ pcoa_panel_setting_DA_sd <- plot_pcoa_grid_multiple_methods(
   n_da_labels = c("1", "20", "40")
 )
 
-fpr_setting_DA_no_sd <- targets::tar_read("sweep_setting_DA_no_sd_fpr")
+# Keep only the final PCoA panel objects
+rm(list = intersect(
+  c(
+    "analysis_DA_no_sd_1", "analysis_DA_no_sd_20", "analysis_DA_no_sd_40",
+    "analysis_DA_sd_1", "analysis_DA_sd_20", "analysis_DA_sd_40"
+  ),
+  ls()
+))
+invisible(gc())
+
+if (exists("fpr_setting_DA_no_sd_filtered", inherits = FALSE)) {
+  fpr_setting_DA_no_sd <- fpr_setting_DA_no_sd_filtered
+} else {
+  fpr_setting_DA_no_sd <- targets::tar_read("sweep_setting_DA_no_sd_fpr")
+}
 fpr_setting_DA_sd <- targets::tar_read("sweep_setting_DA_sd_fpr")
 
 p_setting_DA_no_sd <- plot_da_taxa_sweep_results(
@@ -3228,6 +3311,10 @@ p_setting_DA_sd <- plot_da_taxa_sweep_results(
   sigma_val = sigma_DA_sd,
   intercept_disp_val = intercept_disp_DA_sd
 )
+
+# Keep only final sweep plot objects
+rm(list = intersect(c("fpr_setting_DA_no_sd", "fpr_setting_DA_sd"), ls()))
+invisible(gc())
 
 p_setting_DA_no_sd_top <- (p_setting_DA_no_sd | pcoa_panel_setting_DA_no_sd) + 
   patchwork::plot_layout(guides = "collect", widths = c(1, 1)) &
