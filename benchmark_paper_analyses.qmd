@@ -106,7 +106,6 @@ library(ggrepel)
 library(lme4)
 
 source("functions.R")
-source("utils_proportion_transform.R")
 
 knitr::opts_chunk$set(
   fig.path = "ibd_paper_figures/",
@@ -739,7 +738,6 @@ suppressPackageStartupMessages({
 })
 
 source("functions.R")
-source("utils_proportion_transform.R")
 
 utils::globalVariables(c(
   "parameter", "c_effect", "c_lower", "c_upper", "v_effect",
@@ -755,7 +753,7 @@ load_sccomp_result <- function(path) {
 list(
   tar_target(
     sccomp_result_file,
-    "HMP2_sccomp_results.rds",
+    "/vast/projects/mangiola_immune_map/labHead/beta_dispersion_interpretability/HMP2_sccomp_results.rds",
     format = "file"
   ),
   tar_target(
@@ -1875,6 +1873,9 @@ intercept_effects_case4_5 <- result_case4_5 %>%
 prec_coeff_summary_case4_5 <- fit_case4_5$summary("prec_coeff")
 prec_slope_case4_5 <- prec_coeff_summary_case4_5$mean[2]  # ≈ -0.64
 k_realistic_case4_5 <- prec_slope_case4_5  # k = prec_slope for simulator
+
+rm(result_case4_5)
+gc()
 ```
 
 ```{r figure-2-setup}
@@ -2448,243 +2449,6 @@ invisible(gc())
 ```
 
 
-## Supplementary Figure 2: Non-filtered Data
-
-This figure shows method performance on non-filtered simulated data with differential overdispersion but no differential abundance.
-
-```{r fig-3.5-case4.5, eval=FALSE}
-#| fig-cap: "Differential variability without mean composition differences (realistic HMP2 parameters, realistic number of taxa, sd_log_overdispersion = 0). Same as Figure 3 but with no random variation in overdispersion across taxa."
-# NOTE: This chunk requires roc_stats_realistic_taxa target which doesn't exist.
-# Only the filtered version (sweep_setting_DO_no_sd_fpr) is available.
-cols_prgn <- c(
-  "non-IBD" = RColorBrewer::brewer.pal(11, "PRGn")[10], # green
-  "IBD" = RColorBrewer::brewer.pal(11, "PRGn")[2]   # purple
-)
-
-# cmp_realistic_taxa removed - create a minimal comparison just for the plots needed
-cmp_realistic_taxa_minimal <- format_analysis_results_for_plotting(
-  analysis_results = analysis_realistic_taxa,
-  case_label = "Case 4.5"
-)
-
-alpha_plot_realistic_taxa <- plot_alpha_diversity_scatter(sim_realistic_taxa, case_label = "Case 4.5") +
-  ggplot2::scale_color_manual(values = cols_prgn, guide = "none") +
-  ggplot2::scale_fill_manual(values = cols_prgn, guide = "none")
-
-# Filter distances for non-IBD methods
-distances_non_ibd_realistic_taxa <- cmp_realistic_taxa_minimal$distances_long %>%
-  dplyr::mutate(method_char = as.character(method)) %>%
-  dplyr::filter(!startsWith(method_char, "ibd")) %>%
-  dplyr::mutate(method_label = sapply(method_char, pretty_method_label_box)) %>%
-  dplyr::mutate(method_group = dplyr::case_when(
-    method_label %in% c("Aitchison", "robust Aitchison") ~ "Aitchison methods",
-    TRUE ~ "Other methods"
-  ))
-
-# Create boxplot panel for all methods (excluding IBD) with facets
-p_boxplots_all_realistic_taxa <- ggplot(distances_non_ibd_realistic_taxa, aes(x = method_label, y = distance, fill = group)) +
-  geom_boxplot(width = 0.5, outlier.size = 0.1, alpha = 0.85, linewidth = 0.25, outlier.stroke = 0, position = position_dodge(width = 0.8)) +
-  geom_jitter(size = 1.0, alpha = 0.25, stroke = 0, position = position_jitterdodge(dodge.width = 0.8, jitter.width = 0.12)) +
-  scale_fill_manual(values = cols_prgn, labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"), name = NULL) +
-  facet_wrap(~ method_group, nrow = 1, scales = "free", space = "free_x") +
-  labs(x = NULL, y = "Distance to centroid") +
-  theme_multipanel +
-  theme(
-    axis.text.x = element_text(angle = 45, hjust = 1, size = 6),
-  )
-
-# Create PCoA plots for all methods (excluding IBD)
-non_ibd_methods_realistic_taxa <- names(cmp_realistic_taxa_minimal$bd_by_method)[!startsWith(names(cmp_realistic_taxa_minimal$bd_by_method), "ibd")]
-
-pcoa_plots_all_realistic_taxa <- purrr::imap(non_ibd_methods_realistic_taxa, function(method_key, idx) {
-  bd <- cmp_realistic_taxa_minimal$bd_by_method[[method_key]]
-  
-  method_label <- pretty_method_label_box(method_key)
-  p_val <- cmp_realistic_taxa_minimal$stats %>% 
-    dplyr::filter(method == method_key) %>% 
-    dplyr::pull(p_value)
-  
-  gg <- plot_betadisper_pcoa_and_boxplot(
-    bd,
-    title_prefix = method_label,
-    cols = cols_prgn,
-    p_value = p_val,
-    show_group_legend = FALSE,
-    horizontal_box = FALSE
-  )
-  
-  gg$pcoa <- gg$pcoa + 
-    ggtitle(method_label) +
-    theme(
-      plot.title = element_text(size = 7, hjust = 0.5, margin = margin(b = 2))
-    )
-  
-  if (idx > 1) {
-    gg$pcoa <- gg$pcoa + theme(axis.title.y = element_blank())
-  }
-  gg$pcoa
-})
-
-# Create PCoA grid with 5 PCoA plots + 1 spacer (2x3 grid)
-if (length(pcoa_plots_all_realistic_taxa) > 0) {
-  # Combine PCoA plots with spacer
-  all_plots_realistic_taxa <- c(pcoa_plots_all_realistic_taxa, list(plot_spacer()))
-  p_pcoa_all_realistic_taxa <- patchwork::wrap_plots(all_plots_realistic_taxa, nrow = 2, ncol = 3) + patchwork::plot_layout(guides = "collect") &
-    theme(legend.position = "bottom")
-  } else {
-  p_pcoa_all_realistic_taxa <- ggplot() + theme_void()
-}
-
-# Calculate False Negative Rate (FNR) for each delta and method
-fnr_sweep_realistic_taxa <- roc_stats_realistic_taxa %>%
-  dplyr::filter(!grepl("^IBD", method, ignore.case = TRUE)) %>%
-  dplyr::group_by(delta, method) %>%
-  dplyr::summarise(
-    n_sims = dplyr::n(),
-    n_fn = sum(p_value > 0.05),
-    FNR = n_fn / n_sims,
-    .groups = "drop"
-  ) %>%
-  dplyr::mutate(method = coerce_method_levels(method))
-
-p_sweep_fnr_realistic_taxa <- ggplot(fnr_sweep_realistic_taxa, aes(x = delta, y = FNR, color = method)) +
-  geom_line(linewidth = 0.1) +
-  geom_point(size = 1.0, stroke = 0) +
-  scale_color_manual(values = roc_colors_all, breaks = method_levels, drop = FALSE, name = NULL) +
-  scale_x_continuous(breaks = {
-    breaks <- unique(fnr_sweep_realistic_taxa$delta)
-    breaks[breaks == 0 | breaks >= 0.25]
-  }, labels = format_axis_labels) +
-  scale_y_continuous(labels = format_axis_labels, limits = c(0, 1)) +
-    labs(
-    x = "Differential dispersion (log)",
-    y = "False negative rate"
-  ) +
-  theme_multipanel
-
-# Calculate mean centroid distance for each delta and method
-centroid_sweep_realistic_taxa_raw <- roc_stats_realistic_taxa %>%
-  dplyr::filter(!grepl("^IBD", method, ignore.case = TRUE)) %>%
-  dplyr::group_by(delta, method) %>%
-  dplyr::summarise(
-    n_sims = dplyr::n(),
-    mean_centroid_dist = mean(centroid_dist, na.rm = TRUE),
-    se_centroid_dist = sd(centroid_dist, na.rm = TRUE) / sqrt(dplyr::n()),
-    .groups = "drop"
-  )
-
-# Normalize centroid distances within each method
-baseline_realistic_taxa <- centroid_sweep_realistic_taxa_raw %>%
-  dplyr::filter(delta == 0) %>%
-  dplyr::select(method, baseline_dist = mean_centroid_dist)
-
-centroid_sweep_realistic_taxa <- centroid_sweep_realistic_taxa_raw %>%
-  dplyr::left_join(baseline_realistic_taxa, by = "method") %>%
-      dplyr::mutate(
-    method = coerce_method_levels(method),
-    norm_centroid_dist = mean_centroid_dist / baseline_dist,
-    norm_se = se_centroid_dist / baseline_dist
-  )
-
-p_sweep_realistic_taxa <- ggplot(centroid_sweep_realistic_taxa, aes(x = delta, y = norm_centroid_dist, color = method)) +
-  geom_hline(yintercept = 1, linetype = "dashed", color = "grey60", linewidth = 0.1) +
-  geom_ribbon(aes(ymin = norm_centroid_dist - norm_se, 
-                  ymax = norm_centroid_dist + norm_se, fill = method), 
-              alpha = 0.2, color = NA) +
-  geom_line(linewidth = 0.1) +
-  geom_point(size = 1.0, stroke = 0) +
-  scale_color_manual(values = roc_colors_all, breaks = method_levels, drop = FALSE, name = NULL) +
-  scale_fill_manual(values = roc_colors_all, breaks = method_levels, drop = FALSE, guide = "none") +
-  scale_x_continuous(breaks = {
-    breaks <- unique(centroid_sweep_realistic_taxa$delta)
-    breaks[breaks == 0 | breaks >= 0.25]
-  }, labels = format_axis_labels) +
-  scale_y_continuous(labels = format_axis_labels) +
-  labs(
-    x = "Differential dispersion (log)",
-    y = "Normalized distance"
-  ) +
-  theme_multipanel
-
-# Create whisker plot for ALL taxa (Case 4.5, non-filtered)
-arcsin_sqrt_trans_realistic_taxa_all <- scales::trans_new(
-  name = "arcsin_sqrt",
-  transform = function(x) asin(sqrt(pmax(0, pmin(1, x)))),
-  inverse = function(y) sin(y)^2,
-  breaks = scales::extended_breaks(),
-  domain = c(0, 1)
-)
-
-d_whisker_realistic_taxa_all_nonfiltered <- sim_realistic_taxa$count_long %>%
-    dplyr::mutate(proportion = count / library_size) %>%
-    dplyr::group_by(group, taxon_id) %>%
-    dplyr::summarise(
-      mean_prop = mean(proportion, na.rm = TRUE),
-      p_low = stats::quantile(proportion, 0.025, na.rm = TRUE),
-      p_high = stats::quantile(proportion, 0.975, na.rm = TRUE),
-      .groups = "drop"
-    )
-  
-taxon_order_whisker_realistic_taxa_all_nonfiltered <- d_whisker_realistic_taxa_all_nonfiltered %>%
-    dplyr::group_by(taxon_id) %>%
-    dplyr::summarise(overall_mean = mean(mean_prop, na.rm = TRUE), .groups = "drop") %>%
-    dplyr::arrange(dplyr::desc(overall_mean)) %>%
-    dplyr::pull(taxon_id)
-  
-d_whisker_realistic_taxa_all_nonfiltered <- d_whisker_realistic_taxa_all_nonfiltered %>%
-  dplyr::mutate(taxon_id = factor(taxon_id, levels = taxon_order_whisker_realistic_taxa_all_nonfiltered))
-  
-prop_breaks_whisker_realistic_taxa_all_nonfiltered <- c(0.001, 0.01, 0.05, 0.1, 0.2, 0.3, 0.5)
-prop_breaks_whisker_realistic_taxa_all_nonfiltered <- prop_breaks_whisker_realistic_taxa_all_nonfiltered[prop_breaks_whisker_realistic_taxa_all_nonfiltered <= max(d_whisker_realistic_taxa_all_nonfiltered$p_high, na.rm = TRUE) * 1.1]
-  
-p_whisker_realistic_taxa_all_nonfiltered <- ggplot(d_whisker_realistic_taxa_all_nonfiltered, aes(x = taxon_id, y = mean_prop, ymin = p_low, ymax = p_high, color = group)) +
-    ggplot2::geom_linerange(position = ggplot2::position_dodge(width = 0.6), linewidth = 0.5, alpha = 0.8) +
-  ggplot2::geom_point(position = ggplot2::position_dodge(width = 0.6), size = 1.0, stroke = 0) +
-  ggplot2::scale_color_manual(values = cols_prgn, name = NULL) +
-    ggplot2::scale_y_continuous(
-    trans = arcsin_sqrt_trans_realistic_taxa_all,
-    breaks = prop_breaks_whisker_realistic_taxa_all_nonfiltered,
-    labels = function(x) gsub("\\.0%", "%", scales::percent_format(accuracy = 0.1)(x))
-    ) +
-    ggplot2::labs(
-      x = "Taxon (ordered by mean proportion)",
-      y = "Proportion (arcsin-sqrt scale, 95% CI)"
-    ) +
-    theme_multipanel +
-    ggplot2::theme(
-      axis.text.x = ggplot2::element_blank(),
-      axis.ticks.x = ggplot2::element_blank(),
-    legend.position = "bottom"
-  )
-
-# First row: spacer | whisker plot (all taxa) | alpha diversity | boxplot (Case 4.5, non-filtered)
-fig_supp_2_row1_new <- (plot_spacer() | p_whisker_realistic_taxa_all_nonfiltered | alpha_plot_realistic_taxa | p_boxplots_all_realistic_taxa) + 
-  patchwork::plot_layout(widths = c(0.15, 0.35, 0.25, 0.25), guides = "collect") &
-  theme(plot.margin = margin(0, 0, 0, 0, "pt"), legend.key.size = unit(0.2, 'cm'), legend.position = "bottom")
-
-# Second row: PCoA grid on left, sweep plots on right
-fig_supp_2_row2_new <- (p_pcoa_all_realistic_taxa | (p_sweep_fnr_realistic_taxa / p_sweep_realistic_taxa) + patchwork::plot_layout(heights = c(1, 1))) + 
-  patchwork::plot_layout(guides = "collect", widths = c(1, 1)) &
-  theme(plot.margin = margin(0, 0, 0, 0, "pt"), legend.key.size = unit(0.2, 'cm'), legend.position = "bottom")
-
-fig_supp_2 <- (fig_supp_2_row1_new / fig_supp_2_row2_new) + 
-  patchwork::plot_layout(guides = "collect", heights = c(1, 2)) &
-  theme(plot.margin = margin(0, 0, 0, 0, "pt"), legend.key.size = unit(0.2, 'cm'))
-```
-
-```{r fig-supp-2-combined, fig.width=16, fig.height=14, eval=FALSE}
-#| fig-cap: "Differential variability without mean composition differences (realistic HMP2 parameters, sd_log_overdispersion = 0). Case 4.5: realistic number of taxa, no random variation in overdispersion."
-# NOTE: This chunk requires roc_stats_realistic_taxa target which doesn't exist.
-# Only the filtered version (sweep_setting_DO_no_sd_fpr) is available.
-# fig_2_5_row1_new removed - no longer needed
-# fig_supp_2 <- fig_supp_2
-# 
-# fig_supp_2
-# 
-# ggsave("Supp_Figure_2.pdf", fig_supp_2, width = 183, height = 230, units = "mm")
-```
-
-
 # Simulation no-DO (No Differential Overdispersion)
 
 This section tests method performance when there is **differential abundance but NO differential overdispersion**. This evaluates whether methods produce false positives from composition differences when there is no true differential dispersion.
@@ -2733,7 +2497,6 @@ This setting uses the same simulated data as Setting DA_no_sd but filters out ta
 ```{r figure-3-seed-selection}
 # Seed selection for Figure 3 (PCoA plots and top row)
 # Change seed_idx to try different seeds and find a more representative example
-# seed_idx = 1 uses the first available seed, seed_idx = 2 uses the second, etc.
 seed_idx_fig3 <- 1
 ```
 
