@@ -157,7 +157,9 @@ calculate_sd_from_overdispersion_ratio <- function(mu, overdispersion_ratio, n) 
 #' @param n_taxa Number of taxa.
 #' @param n_samples Total samples (split by design).
 #' @param sd_log_overdispersion SD of log(sigma) noise (taxon-level heterogeneity).
-#' @param intercept_dispersion Scalar or per-cohort intercept c. Higher = more overdispersion.
+#' @param intercept_dispersion Dispersion intercept c. Supported shapes:
+#'   scalar, length n_cohorts, length n_taxa, or length n_cohorts*n_taxa.
+#'   Higher = more overdispersion.
 #' @param library_size_mean,library_size_sd Library size distribution.
 #' @param design_matrix Optional; default intercept + one group covariate.
 #' @param seed Optional random seed.
@@ -288,22 +290,52 @@ simulate_compositional_bb <- function(
     byrow = TRUE
   )
   
-  # Allow cohort/group-specific dispersion intercepts
-  # - scalar: same intercept for all cohorts
-  # - vector length n_cohorts: one intercept per cohort (e.g., Group1 vs Group2)
+  # Allow flexible dispersion intercept specification:
+  # - scalar: shared across cohorts and taxa
+  # - length n_cohorts: cohort-specific, shared across taxa
+  # - length n_taxa: taxon-specific, shared across cohorts
+  # - length n_cohorts*n_taxa: fully specified cohort x taxon matrix
   intercept_dispersion_vec <- intercept_dispersion
-  if (length(intercept_dispersion_vec) == 1) {
-    intercept_dispersion_vec <- rep(intercept_dispersion_vec, n_cohorts)
-  }
-  if (length(intercept_dispersion_vec) != n_cohorts) {
+  len_c <- length(intercept_dispersion_vec)
+  if (len_c == 1) {
+    intercept_dispersion_matrix <- matrix(
+      intercept_dispersion_vec,
+      nrow = n_cohorts,
+      ncol = n_taxa,
+      byrow = FALSE
+    )
+  } else if (len_c == n_cohorts) {
+    intercept_dispersion_matrix <- matrix(
+      intercept_dispersion_vec,
+      nrow = n_cohorts,
+      ncol = n_taxa,
+      byrow = FALSE
+    )
+  } else if (len_c == n_taxa) {
+    intercept_dispersion_matrix <- matrix(
+      intercept_dispersion_vec,
+      nrow = n_cohorts,
+      ncol = n_taxa,
+      byrow = TRUE
+    )
+  } else if (len_c == (n_cohorts * n_taxa)) {
+    intercept_dispersion_matrix <- matrix(
+      intercept_dispersion_vec,
+      nrow = n_cohorts,
+      ncol = n_taxa,
+      byrow = TRUE
+    )
+  } else {
     stop(
       sprintf(
-        "intercept_dispersion must be length 1 or length n_cohorts=%d (got %d).",
-        n_cohorts, length(intercept_dispersion_vec)
+        paste0(
+          "intercept_dispersion must have length 1, n_cohorts (%d), ",
+          "n_taxa (%d), or n_cohorts*n_taxa (%d); got %d."
+        ),
+        n_cohorts, n_taxa, n_cohorts * n_taxa, len_c
       )
     )
   }
-  intercept_dispersion_matrix <- matrix(intercept_dispersion_vec, nrow = n_cohorts, ncol = n_taxa, byrow = FALSE)
 
   # Calculate log(sigma) at cohort level
   # log(sigma) = -k * cohort_log_mu + c + error
@@ -347,15 +379,6 @@ simulate_compositional_bb <- function(
     check.names = FALSE  # Preserve column names
   )
   
-  # Add cohort label to sample_metadata
-  if ("Group" %in% colnames(unique_design)) {
-    sample_metadata$cohort_label <- ifelse(sample_metadata$Group == 1, "IBD", "non-IBD")
-    # Also add lowercase 'group' column for convenience
-    sample_metadata$group <- sample_metadata$cohort_label
-  } else {
-    sample_metadata$cohort_label <- paste0("Cohort_", sample_metadata$cohort_idx)
-  }
-  
   # ========================================================================
   # Create Ground Truth Parameters Table from COHORT-level parameters
   # ========================================================================
@@ -369,17 +392,6 @@ simulate_compositional_bb <- function(
   ground_truth_params_list <- vector("list", n_cohorts)
   
   for (cohort_idx in 1:n_cohorts) {
-    # Get design matrix values for this cohort
-    cohort_design <- unique_design[cohort_idx, , drop = TRUE]
-    
-    # Create a name/label for this cohort
-    if ("Group" %in% colnames(unique_design)) {
-      # Design matrix: non-IBD has Group=0, IBD has Group=1
-      cohort_label <- ifelse(cohort_design["Group"] == 1, "IBD", "non-IBD")
-    } else {
-      cohort_label <- paste0("Cohort_", cohort_idx)
-    }
-    
     # Extract cohort-level parameters directly from matrices
     cohort_log_linear_pred <- cohort_log_linear_predictors[cohort_idx, ]
     cohort_log_sig <- cohort_log_sigma[cohort_idx, ]
@@ -389,7 +401,6 @@ simulate_compositional_bb <- function(
     # Create simplified data frame for this cohort
     ground_truth_params_list[[cohort_idx]] <- data.frame(
       taxon_id = paste0("Taxon_", 1:n_taxa),
-      cohort_label = cohort_label,
       cohort_idx = cohort_idx,
       baseline_intercept = baseline_intercepts,
       slope = slope_vector,
@@ -402,11 +413,6 @@ simulate_compositional_bb <- function(
   }
   
   ground_truth_params <- do.call(rbind, ground_truth_params_list)
-  
-  # Rename 'cohort_label' to 'group' if it's a group-based design for backward compatibility
-  if ("Group" %in% colnames(unique_design)) {
-    colnames(ground_truth_params)[colnames(ground_truth_params) == "cohort_label"] <- "group"
-  }
   
   # ========================================================================
   # Create count_long by expanding ground_truth_params to sample level
@@ -422,48 +428,50 @@ simulate_compositional_bb <- function(
   
   # Join with sample metadata to get cohort_idx and library_size
   count_long <- count_long %>%
-    left_join(sample_metadata %>% select(sample_id, library_size, cohort_idx), 
-              by = "sample_id")
-  
+    dplyr::left_join(
+      sample_metadata %>% dplyr::select("sample_id", "library_size", "cohort_idx"),
+      by = "sample_id"
+    )
+
   # Join with ground_truth_params to get cohort-level parameters
   count_long <- count_long %>%
-    left_join(ground_truth_params %>% select(taxon_id, cohort_idx, 
-                                              cohort_mu, cohort_sigma, 
-                                              cohort_log_linear_predictors, cohort_log_sigma),
-              by = c("taxon_id", "cohort_idx"))
-  
-  # Rename cohort_ columns to sample-level columns (they're the same within a cohort)
+    dplyr::left_join(
+      ground_truth_params %>% dplyr::select(
+        taxon_id, cohort_idx,
+        cohort_mu, cohort_sigma,
+        cohort_log_linear_predictors, cohort_log_sigma
+      ),
+      by = c("taxon_id", "cohort_idx")
+    )
+
+  # Rename cohort_ columns to sample-level columns (they're the same within a cohort).
+  # Use dplyr::rename explicitly: S4Vectors (loaded by sccomp) also provides rename().
   count_long <- count_long %>%
-    rename(
+    dplyr::rename(
       mu = cohort_mu,
       sigma = cohort_sigma,
       unconstrained_log_mu = cohort_log_linear_predictors,
       log_sigma = cohort_log_sigma
     )
-  
+
   # Simulate counts using pmap
   count_long <- count_long %>%
-    mutate(
+    dplyr::mutate(
       count = pmap_dbl(
         list(library_size, mu, sigma),
         function(n, mu, sigma) simulate_beta_binomial(n = n, mu = mu, sigma = sigma, n_sim = 1)
       )
     )
-  
+
   # Add remaining sample metadata (design matrix columns)
   count_long <- count_long %>%
-    left_join(sample_metadata, by = c("sample_id", "library_size", "cohort_idx"))
-  
-  # Remove cohort_idx and cohort_label as they're internal
-  count_long <- count_long %>%
-    select(-cohort_idx, -cohort_label)
-  
-  # Add lowercase 'group' column for backward compatibility (if Group column exists)
-  if ("Group" %in% colnames(count_long)) {
-    count_long <- count_long %>%
-      mutate(group = ifelse(Group == 1, "IBD", "non-IBD"))
-  }
-  
+    dplyr::left_join(sample_metadata, by = c("sample_id", "library_size", "cohort_idx"))
+
+  count_long <- count_long %>% dplyr::select(-dplyr::any_of("cohort_idx"))
+
+  # Factor `group` for betadisper is *not* set here — add it in the Quarto report after
+  # simulate_compositional_bb() so labels match each benchmark dataset.
+
   # Also create legacy taxon_metadata for backward compatibility
   taxon_metadata <- ground_truth_params
   
@@ -2224,6 +2232,44 @@ build_assoc_adjusted_piaware_hellinger_highprev_dampened_betadisper_inputs <- fu
 
 
 # Functions used in targets pipeline
+extract_precision_trend_params <- function(fit) {
+  fit_vars <- tryCatch(
+    fit$metadata()$stan_variables,
+    error = function(e) character()
+  )
+
+  # Legacy sccomp output: single 2-parameter vector `prec_coeff`.
+  if ("prec_coeff" %in% fit_vars || length(fit_vars) == 0) {
+    prec_coeff_summary <- fit$summary("prec_coeff")
+    return(list(
+      prec_intercept = prec_coeff_summary$mean[1],
+      prec_slope = prec_coeff_summary$mean[2],
+      k_sd_real = prec_coeff_summary$sd[2],
+      slope_parameter = "prec_coeff[2]"
+    ))
+  }
+
+  # Newer sccomp output: intercept + one or more slope parameters.
+  if (!("prec_intercept" %in% fit_vars)) {
+    stop("Could not find precision intercept parameter in sccomp fit.")
+  }
+  slope_vars <- sort(grep("^prec_slope", fit_vars, value = TRUE))
+  if (length(slope_vars) == 0) {
+    stop("Could not find precision slope parameter in sccomp fit.")
+  }
+
+  slope_parameter <- slope_vars[1]
+  prec_intercept <- fit$summary("prec_intercept")$mean[1]
+  slope_summary <- fit$summary(slope_parameter)
+
+  list(
+    prec_intercept = prec_intercept,
+    prec_slope = slope_summary$mean[1],
+    k_sd_real = slope_summary$sd[1],
+    slope_parameter = slope_parameter
+  )
+}
+
 extract_sccomp_params <- function(result) {
   fit <- attr(result, "fit")
   model_input <- attr(result, "model_input")
@@ -2236,11 +2282,11 @@ extract_sccomp_params <- function(result) {
     n_samples_real <- 178
   }
 
-  prec_coeff_summary <- fit$summary("prec_coeff")
-  prec_intercept <- prec_coeff_summary$mean[1]
-  prec_slope <- prec_coeff_summary$mean[2]
+  precision_params <- extract_precision_trend_params(fit)
+  prec_intercept <- precision_params$prec_intercept
+  prec_slope <- precision_params$prec_slope
   k_real <- prec_slope
-  k_sd_real <- prec_coeff_summary$sd[2]
+  k_sd_real <- precision_params$k_sd_real
   c_real <- -prec_intercept
 
   prec_sd_summary <- fit$summary("prec_sd")
@@ -2284,13 +2330,19 @@ extract_sccomp_params <- function(result) {
   )
 }
 
-build_simulation_params <- function(sccomp_params, n_reps_auc = 20) {
+build_simulation_params <- function(
+  sccomp_params,
+  n_reps_auc = 20,
+  group_levels = c("group_0", "group_1")
+) {
+  if (length(group_levels) != 2) {
+    stop("group_levels must have length 2 (Group==0 then Group==1 in design_matrix_from_groups).")
+  }
   set.seed(123)
   n_taxa <- min(sccomp_params$n_taxa_real, 200)
   n_samples_per_group <- floor(sccomp_params$n_samples_real / 2)
   n_groups <- 2
   n_samples <- n_samples_per_group * n_groups
-  group_levels <- c("non-IBD", "IBD")
 
   library_size_mean <- 15125
   library_size_sd <- 5000
@@ -2326,12 +2378,161 @@ build_simulation_params <- function(sccomp_params, n_reps_auc = 20) {
   )
 }
 
+# Variant of extract_sccomp_params for models whose non-intercept coefficient name
+# is not fixed (e.g. body_site terms); also exposes taxon-level alpha intercepts.
+extract_sccomp_params_brito <- function(result) {
+  fit <- attr(result, "fit")
+  model_input <- attr(result, "model_input")
+
+  if (!is.null(model_input) && is.list(model_input)) {
+    n_samples_real <- model_input$N
+    n_taxa_real <- model_input$M
+  } else {
+    n_taxa_real <- length(unique(result$cell_group))
+    n_samples_real <- 178
+  }
+
+  precision_params <- extract_precision_trend_params(fit)
+  prec_intercept <- precision_params$prec_intercept
+  prec_slope <- precision_params$prec_slope
+  k_real <- prec_slope
+  k_sd_real <- precision_params$k_sd_real
+  c_real <- -prec_intercept
+
+  prec_sd_summary <- fit$summary("prec_sd")
+  prec_sd_real <- prec_sd_summary$mean[1]
+
+  intercept_effects <- result %>%
+    filter(.data$parameter == "(Intercept)") %>%
+    pull(.data$c_effect)
+
+  group_parameter <- result %>%
+    dplyr::filter(.data$parameter != "(Intercept)") %>%
+    dplyr::pull(.data$parameter) %>%
+    unique()
+  if (length(group_parameter) == 0) {
+    stop("No non-intercept parameter found in sccomp result.")
+  }
+  group_parameter <- group_parameter[1]
+
+  slope_effects <- result %>%
+    filter(.data$parameter == group_parameter) %>%
+    pull(.data$c_effect)
+
+  slope_data <- result %>%
+    filter(.data$parameter == group_parameter)
+
+  slope_effects_significant <- slope_data %>%
+    filter(.data$c_lower > 0 | .data$c_upper < 0) %>%
+    pull(.data$c_effect)
+
+  v_intercept <- result %>%
+    filter(.data$parameter == "(Intercept)") %>%
+    pull(.data$v_effect)
+
+  v_slope <- result %>%
+    filter(.data$parameter == group_parameter) %>%
+    pull(.data$v_effect)
+
+  # sccomp variability terms are on precision scale; convert to log(sigma)-like
+  # intercept effects via sign inversion, matching existing conventions.
+  alpha_intercept_effects <- -v_intercept
+
+  list(
+    n_samples_real = n_samples_real,
+    n_taxa_real = n_taxa_real,
+    k_real = k_real,
+    k_sd_real = k_sd_real,
+    c_real = c_real,
+    prec_sd_real = prec_sd_real,
+    intercept_effects = intercept_effects,
+    slope_effects = slope_effects,
+    slope_effects_significant = slope_effects_significant,
+    v_intercept = v_intercept,
+    v_slope = v_slope,
+    alpha_intercept_effects = alpha_intercept_effects,
+    group_parameter = group_parameter
+  )
+}
+
+build_simulation_params_brito <- function(
+  sccomp_params,
+  n_reps_auc = 20,
+  group_levels = c("group_0", "group_1")
+) {
+  if (length(group_levels) != 2) {
+    stop("group_levels must have length 2 (Group==0 then Group==1 in design_matrix_from_groups).")
+  }
+  set.seed(123)
+  n_taxa <- min(sccomp_params$n_taxa_real, 200)
+  n_samples_per_group <- floor(sccomp_params$n_samples_real / 2)
+  n_groups <- 2
+  n_samples <- n_samples_per_group * n_groups
+
+  library_size_mean <- 15125
+  library_size_sd <- 5000
+
+  sampled_intercepts <- sample(sccomp_params$intercept_effects, n_taxa, replace = TRUE)
+  mu_inv_softmax_base_realistic <- sampled_intercepts - mean(sampled_intercepts)
+
+  # Use empirical alpha-intercept distribution from fitted variability intercepts.
+  # We keep simulator compatibility (scalar c + taxon-level random spread) by
+  # mapping sampled alpha effects to mean/SD controls.
+  sampled_alpha <- sample(sccomp_params$alpha_intercept_effects, n_taxa, replace = TRUE)
+  intercept_disp_realistic <- mean(sampled_alpha)
+  intercept_disp_realistic_taxon <- sampled_alpha
+  sd_log_overdispersion_realistic <- stats::sd(sampled_alpha)
+  sigma_realistic <- exp(intercept_disp_realistic)
+
+  set.seed(123)
+  slope_realistic <- sample(sccomp_params$slope_effects, n_taxa, replace = TRUE)
+  slope_realistic <- slope_realistic - mean(slope_realistic)
+
+  perm_reps_auc <- 199
+  rep_seeds_auc <- 12000 + seq_len(n_reps_auc)
+
+  list(
+    n_taxa = n_taxa,
+    n_samples_per_group = n_samples_per_group,
+    n_groups = n_groups,
+    n_samples = n_samples,
+    group_levels = group_levels,
+    library_size_mean = library_size_mean,
+    library_size_sd = library_size_sd,
+    mu_inv_softmax_base_realistic = mu_inv_softmax_base_realistic,
+    intercept_disp_realistic = intercept_disp_realistic,
+    intercept_disp_realistic_taxon = intercept_disp_realistic_taxon,
+    sigma_realistic = sigma_realistic,
+    slope_realistic = slope_realistic,
+    sd_log_overdispersion_realistic = sd_log_overdispersion_realistic,
+    alpha_intercept_sampled = sampled_alpha,
+    n_reps_auc = n_reps_auc,
+    perm_reps_auc = perm_reps_auc,
+    rep_seeds_auc = rep_seeds_auc
+  )
+}
+
 design_matrix_from_groups <- function(n_samples_per_group) {
-  group <- rep(c("non-IBD", "IBD"), each = n_samples_per_group)
   cbind(
     Intercept = 1,
-    Group = ifelse(group == "IBD", 1, 0)
+    Group = rep(c(0L, 1L), each = n_samples_per_group)
   )
+}
+
+# Map binary `Group` (0 then 1) to a factor; `group_levels` is chosen by the caller (e.g. Quarto).
+synthetic_sim_add_two_group_factor <- function(sim_r, group_levels) {
+  if (length(group_levels) != 2) {
+    stop("group_levels must have length 2 (first = Group 0, second = Group 1).")
+  }
+  sim_r$sample_metadata$group <- factor(
+    ifelse(sim_r$sample_metadata$Group == 1L, group_levels[[2]], group_levels[[1]]),
+    levels = group_levels
+  )
+  sim_r$count_long$group <- factor(
+    ifelse(sim_r$count_long$Group == 1L, group_levels[[2]], group_levels[[1]]),
+    levels = group_levels
+  )
+  sim_r
 }
 
 detect_n_cores <- function(max_cores = NULL) {
@@ -2515,10 +2716,13 @@ run_da_taxa_sweep <- function(
   library_size_mean,
   library_size_sd,
   rep_seeds_auc,
-  perm_reps_auc
+  perm_reps_auc,
+  group_levels = c("group_0", "group_1")
 ) {
+  if (length(group_levels) != 2) {
+    stop("group_levels must have length 2.")
+  }
   standard_distance_methods <- c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
-  group_levels <- c("non-IBD", "IBD")
 
   simulate_case_local <- function(slope_vec, mu_inv_softmax, log_dispersion_assoc, seed) {
     simulate_compositional_bb( # nolint
@@ -2552,7 +2756,10 @@ run_da_taxa_sweep <- function(
       slope_vec <- slope_vec - mean(slope_vec)
     }
 
-    sim_r <- simulate_case_local(slope_vec, mu_base, k_fixed, seed)
+    sim_r <- synthetic_sim_add_two_group_factor(
+      simulate_case_local(slope_vec, mu_base, k_fixed, seed),
+      group_levels
+    )
 
     inputs_std <- purrr::set_names(
       lapply(standard_distance_methods, \(dm) {
@@ -2597,7 +2804,10 @@ run_da_taxa_sweep <- function(
     slope_vec_rep <- slope_vec_rep - mean(slope_vec_rep)
   }
 
-  sim_rep <- simulate_case_local(slope_vec_rep, mu_base, k_fixed, representative_seed)
+  sim_rep <- synthetic_sim_add_two_group_factor(
+    simulate_case_local(slope_vec_rep, mu_base, k_fixed, representative_seed),
+    group_levels
+  )
 
   list(
     fpr_data = fpr_data,
@@ -2622,10 +2832,13 @@ run_da_taxa_sweep_abundance_filtered <- function(
   library_size_sd,
   rep_seeds_auc,
   perm_reps_auc,
-  abundance_threshold = abundance_threshold
+  abundance_threshold = abundance_threshold,
+  group_levels = c("group_0", "group_1")
 ) {
+  if (length(group_levels) != 2) {
+    stop("group_levels must have length 2.")
+  }
   standard_distance_methods <- c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
-  group_levels <- c("non-IBD", "IBD")
 
   simulate_case_local <- function(slope_vec, mu_inv_softmax, log_dispersion_assoc, seed) {
     simulate_compositional_bb( # nolint
@@ -2659,7 +2872,10 @@ run_da_taxa_sweep_abundance_filtered <- function(
       slope_vec <- slope_vec - mean(slope_vec)
     }
 
-    sim_r <- simulate_case_local(slope_vec, mu_base, k_fixed, seed)
+    sim_r <- synthetic_sim_add_two_group_factor(
+      simulate_case_local(slope_vec, mu_base, k_fixed, seed),
+      group_levels
+    )
     sim_r$count_long <- filter_by_abundance_cases(sim_r$count_long, threshold = abundance_threshold)
 
     inputs_std <- purrr::set_names(
@@ -2705,7 +2921,10 @@ run_da_taxa_sweep_abundance_filtered <- function(
     slope_vec_rep <- slope_vec_rep - mean(slope_vec_rep)
   }
 
-  sim_rep <- simulate_case_local(slope_vec_rep, mu_base, k_fixed, representative_seed)
+  sim_rep <- synthetic_sim_add_two_group_factor(
+    simulate_case_local(slope_vec_rep, mu_base, k_fixed, representative_seed),
+    group_levels
+  )
   sim_rep$count_long <- filter_by_abundance_cases(sim_rep$count_long, threshold = abundance_threshold)
 
   list(
@@ -2870,6 +3089,95 @@ run_simulation_job <- function(
   sim_r
 }
 
+# Same as run_simulation_job but accepts taxon-length dispersion intercepts.
+run_simulation_job_brito <- function(
+  job_row,                      # One row from jobs grid (must include seed, n_da_taxa)
+  composition_intercept_by_taxon,  # Composition intercept by taxon (baseline logits; length n_taxa)
+  dispersion_intercept_by_taxon,   # Dispersion intercept by taxon (alpha/log-sigma; length n_taxa; scalar allowed)
+  mean_dispersion_assoc_slope,     # Mean-variance association slope k in log(sigma) = -k*log(mu) + alpha
+  slope_effects_distribution,   # Empirical DA effect-size pool to sample non-zero taxa slopes
+  sd_log_overdispersion,        # Additional random log-sigma noise SD
+  n_taxa,                       # Number of taxa (must match composition/dispersion intercept vector lengths)
+  n_samples,                    # Total simulated samples
+  n_samples_per_group,          # Samples per group (used to build design matrix)
+  library_size_mean,            # Mean sequencing depth
+  library_size_sd,              # SD sequencing depth
+  group_levels = NULL            # If non-NULL, length-2 vector maps Group 0/1 to factor levels (caller supplies labels)
+) {
+  # Aliases with explicit intent for readability.
+  mu_inv_softmax_base <- composition_intercept_by_taxon
+  log_dispersion_assoc <- mean_dispersion_assoc_slope
+  alpha_intercept_by_taxon <- dispersion_intercept_by_taxon
+
+  # Composition and dispersion intercepts are taxon-length vectors.
+  if (length(mu_inv_softmax_base) != n_taxa) {
+    stop(
+      sprintf(
+        "composition_intercept_by_taxon must be length n_taxa=%d (got %d).",
+        n_taxa, length(mu_inv_softmax_base)
+      )
+    )
+  }
+  if (length(alpha_intercept_by_taxon) == 1) {
+    alpha_intercept_by_taxon <- rep(alpha_intercept_by_taxon, n_taxa)
+  }
+  if (length(alpha_intercept_by_taxon) != n_taxa) {
+    stop(
+      sprintf(
+        paste0(
+          "dispersion_intercept_by_taxon must be length n_taxa=%d ",
+          "(or scalar, which is expanded); got %d."
+        ),
+        n_taxa, length(alpha_intercept_by_taxon)
+      )
+    )
+  }
+
+  # Extract seed and n_da_taxa
+  params <- extract_job_params(job_row)
+  seed <- params$seed
+  n_da <- params$n_da_taxa
+
+  # Ensure slope_effects_distribution is not empty
+  if (length(slope_effects_distribution) == 0) {
+    stop("slope_effects_distribution is empty - cannot sample from empty vector")
+  }
+
+  # Create slope vector
+  slope_vec <- rep(0, n_taxa)
+  if (n_da > 0) {
+    set.seed(seed + 10000)
+    da_indices <- sample(1:n_taxa, size = min(n_da, n_taxa), replace = FALSE)
+    slope_vec[da_indices] <- sample(slope_effects_distribution, length(da_indices), replace = TRUE)
+    slope_vec <- slope_vec - mean(slope_vec)
+  }
+
+  # Run simulation
+  sim_r <- simulate_compositional_bb( # nolint
+    slope_vector = slope_vec,
+    mu_inv_softmax = mu_inv_softmax_base,
+    log_dispersion_assoc = log_dispersion_assoc,
+    n_taxa = n_taxa,
+    n_samples = n_samples,
+    sd_log_overdispersion = sd_log_overdispersion,
+    intercept_dispersion = alpha_intercept_by_taxon,
+    library_size_mean = library_size_mean,
+    library_size_sd = library_size_sd,
+    design_matrix = design_matrix_from_groups(n_samples_per_group),
+    seed = seed
+  )
+
+  # Add seed and n_da_taxa to simulation for tracking
+  sim_r$seed <- seed
+  sim_r$n_da_taxa <- n_da
+
+  if (!is.null(group_levels)) {
+    sim_r <- synthetic_sim_add_two_group_factor(sim_r, group_levels)
+  }
+
+  sim_r
+}
+
 # Run analysis on a simulation (betadisper) - SINGLE SOURCE OF TRUTH for analysis
 # This is the only function that performs betadisper analysis
 # Uses adaptive permutations for consistent, accurate p-values across all analyses
@@ -2881,7 +3189,17 @@ run_analysis_job <- function(
   return_full = FALSE,
   standard_distance_methods = c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
 ) {
-  group_levels <- c("non-IBD", "IBD")
+  if (!("group" %in% names(sim_r$sample_metadata))) {
+    stop(
+      "sim_r$sample_metadata must include factor column `group`. ",
+      "Add it in the Quarto document after simulation (see benchmark_*_paper_analyses*.qmd)."
+    )
+  }
+  g <- sim_r$sample_metadata$group
+  if (!is.factor(g)) {
+    stop("sim_r$sample_metadata$group must be a factor (set in Quarto after simulation).")
+  }
+  group_levels <- levels(g)
   
   seed <- sim_r$seed
   n_da <- sim_r$n_da_taxa
@@ -3014,13 +3332,19 @@ run_permanova_job <- function(
     ))
   }
 
+  g <- sim_filtered$sample_metadata$group
+  if (!is.factor(g)) {
+    stop("sample_metadata$group must be a factor (set in Quarto after simulation).")
+  }
+  group_levels <- levels(g)
+
   inputs_std <- purrr::set_names(
     lapply(standard_distance_methods, \(dm) {
       build_standard_betadisper_inputs_paper(
         count_long = sim_filtered$count_long,
         sample_metadata = sim_filtered$sample_metadata,
         distance_method = dm,
-        group_levels = c("non-IBD", "IBD")
+        group_levels = group_levels
       )
     }),
     nm = paste0("permanova_", standard_distance_methods)

@@ -18,6 +18,8 @@ execute:
   fig.path: "bd_benchmark_paper_figures/"
 ---
 
+> **Memory requirement:** Rendering this report can require about **40 GB of RAM**.
+
 ## Overview
 
 This report generates **paper-ready comparison figures** comparing multiple distance constructions for PERMDISP / `betadisper`:
@@ -106,11 +108,6 @@ library(ggrepel)
 library(lme4)
 
 source("functions.R")
-
-# HMP2 / IBD benchmark labels (see synthetic_sim_add_two_group_factor in functions.R)
-annotate_hmp2_sim_groups <- function(sim_r) {
-  synthetic_sim_add_two_group_factor(sim_r, c("non-IBD", "IBD"))
-}
 
 knitr::opts_chunk$set(
   fig.path = "ibd_paper_figures/",
@@ -643,18 +640,103 @@ coerce_method_levels <- function(x) {
 # format_analysis_results_for_plotting is defined in this QMD (plotting helper function)
 ```
 
-```{r download-sccomp-results-if-needed}
-#| include: false
+```{r brito-sccomp-input}
 #| cache: false
 
-# HMP2 sccomp fit from Zenodo (10.5281/zenodo.19144244)
-sccomp_file_path <- "HMP2_sccomp_results.rds"
-zenodo_url <- "https://zenodo.org/records/19144244/files/HMP2_sccomp_results.rds?download=1"
+# BritoIL_2016 sccomp fit derived from curatedMetagenomicData.
+# Factor of interest for this benchmark: body_site (stool vs oralcavity).
+# Following mia/OMA-style preprocessing, we keep target body sites and apply
+# prevalence+detection filtering before model fitting.
+sccomp_file_path <- "BritoIL_2016_sccomp_results.rds"
+
+suppressPackageStartupMessages({
+  library(curatedMetagenomicData)
+  library(TreeSummarizedExperiment)
+  library(dplyr)
+  library(tidyr)
+  library(sccomp)
+  library(tidySummarizedExperiment)
+  library(magrittr)
+})
+
+tse <- curatedMetagenomicData(
+  "BritoIL_2016.relative_abundance",
+  dryrun = FALSE,
+  counts = TRUE
+) %$%
+ `2021-03-31.BritoIL_2016.relative_abundance` |>
+  dplyr::filter(body_site %in% c("stool", "oralcavity")) |>
+  dplyr::mutate(body_site = factor(body_site, levels = c("stool", "oralcavity")))
+
+# MIA-style feature filtering:
+# - detection threshold: at least 10 counts to call a taxon "present"
+# - prevalence threshold: present in at least 10% of samples
+
+n_taxa_before <- nrow(tse)
+tse <- mia::subsetByPrevalent(
+  tse,
+  detection = 10L,
+  prevalence = 0.10,
+  assay.type = "relative_abundance"
+)
+n_taxa_after <- nrow(tse)
+
+cat("BritoIL_2016 sccomp input prepared.\n")
+cat("Samples:", n_distinct(tse$.sample), "\n")
+cat("Taxa:", n_distinct(tse$.feature), "\n")
+cat("Taxa before/after prevalence filter:", n_taxa_before, "/", n_taxa_after, "\n")
+print(
+  tse |>
+    dplyr::distinct(.sample, body_site) |>
+    dplyr::count(body_site)
+)
+```
+
+```{r fit-sccomp-brito-if-needed}
+#| cache: false
 
 if (!file.exists(sccomp_file_path)) {
-  download.file(zenodo_url, sccomp_file_path, mode = "wb")
+  message("Running sccomp_estimate() because file is missing: ", sccomp_file_path)
+  fit <- mia::meltSE(
+    tse,
+    assay.type = "relative_abundance",
+    add.row = FALSE,
+    add.col = TRUE
+  ) |>
+
+  sccomp::sccomp_estimate(
+    formula_composition = ~ body_site + subject_id + age_category + gender + DNA_extraction_kit,
+    formula_variability = ~ body_site,
+    sample = "SampleID",
+    cell_group = "FeatureID",
+    abundance = "relative_abundance",
+    inference_method = "hmc",
+    cores = max(1, parallelly::availableCores() - 1), 
+    bimodal_mean_variability_association = TRUE,
+    verbose = TRUE, 
+    max_sampling_iterations = 4000,
+    sig_figs = 6, 
+
+    # TEST
+    exclude_priors = TRUE
+  )
+  saveRDS(fit, sccomp_file_path)
+  message("Saved sccomp fit to: ", sccomp_file_path)
+} else {
+  message("Using existing sccomp fit: ", sccomp_file_path)
 }
+
+# Always load the fit object for downstream QC/targets chunks.
+fit <- readRDS(sccomp_file_path)
 ```
+
+## QC plots
+```{r qc-plot}
+fit |>
+sccomp_test() |>
+sccomp:::plot_2D_intervals(factor="body_site")
+```
+
 
 ```{r targets-run}
 #| eval: true
@@ -755,14 +837,10 @@ load_sccomp_result <- function(path) {
   readRDS(path)
 }
 
-annotate_hmp2_sim_groups <- function(sim_r) {
-  synthetic_sim_add_two_group_factor(sim_r, c("non-IBD", "IBD"))
-}
-
 list(
   tar_target(
     sccomp_result_file,
-    "/vast/projects/mangiola_immune_map/labHead/beta_dispersion_interpretability/HMP2_sccomp_results.rds",
+    "BritoIL_2016_sccomp_results.rds",
     format = "file"
   ),
   tar_target(
@@ -771,12 +849,12 @@ list(
   ),
   tar_target(
     sccomp_params,
-    extract_sccomp_params(sccomp_result)
+    extract_sccomp_params_brito(sccomp_result)
   ),
   # Number of simulation replications (set to small number for development)
   tar_target(
     n_reps_auc,
-    100L  # Change this to 20 or higher for final runs
+    ifelse(Sys.info()["sysname"] == "Darwin", 1L, 100L)  # Change this to 20 or higher for final runs
   ),
   tar_target(
     abundance_thresholds,
@@ -784,10 +862,10 @@ list(
   ),
   tar_target(
     sim_params,
-    build_simulation_params(
+    build_simulation_params_brito(
       sccomp_params,
       n_reps_auc = n_reps_auc,
-      group_levels = c("non-IBD", "IBD")
+      group_levels = c("stool", "oralcavity")
     )
   ),
   # Setting DA_no_sd: Simulation targets (differential abundance, no sd on overdispersion)
@@ -802,11 +880,11 @@ list(
   ),
   tar_target(
     sweep_setting_DA_no_sd_sim,
-    annotate_hmp2_sim_groups(run_simulation_job(
+    run_simulation_job_brito(
       sweep_setting_DA_no_sd_jobs,
-      intercept_dispersion = sim_params$intercept_disp_realistic,
-      mu_base = sim_params$mu_inv_softmax_base_realistic,
-      k_fixed = 0,
+      dispersion_intercept_by_taxon = sim_params$intercept_disp_realistic_taxon,
+      composition_intercept_by_taxon = sim_params$mu_inv_softmax_base_realistic,
+      mean_dispersion_assoc_slope = 0,
       slope_effects_distribution = sccomp_params$slope_effects_significant,
       sd_log_overdispersion = 0,
       n_taxa = sim_params$n_taxa,
@@ -814,7 +892,7 @@ list(
       n_samples_per_group = sim_params$n_samples_per_group,
       library_size_mean = sim_params$library_size_mean,
       library_size_sd = sim_params$library_size_sd
-    )),
+    ) |> synthetic_sim_add_two_group_factor(c("stool", "oralcavity")),
     pattern = map(sweep_setting_DA_no_sd_jobs),
     iteration = "list"
   ),
@@ -835,11 +913,11 @@ list(
   ),
   tar_target(
     sweep_setting_DA_no_sd_sim_with_threshold,
-    annotate_hmp2_sim_groups(run_simulation_job(
+    run_simulation_job_brito(
       sweep_setting_DA_no_sd_jobs_with_threshold,
-      intercept_dispersion = sim_params$intercept_disp_realistic,
-      mu_base = sim_params$mu_inv_softmax_base_realistic,
-      k_fixed = 0,
+      dispersion_intercept_by_taxon = sim_params$intercept_disp_realistic_taxon,
+      composition_intercept_by_taxon = sim_params$mu_inv_softmax_base_realistic,
+      mean_dispersion_assoc_slope = 0,
       slope_effects_distribution = sccomp_params$slope_effects_significant,
       sd_log_overdispersion = 0,
       n_taxa = sim_params$n_taxa,
@@ -847,7 +925,7 @@ list(
       n_samples_per_group = sim_params$n_samples_per_group,
       library_size_mean = sim_params$library_size_mean,
       library_size_sd = sim_params$library_size_sd
-    )),
+    ) |> synthetic_sim_add_two_group_factor(c("stool", "oralcavity")),
     pattern = map(sweep_setting_DA_no_sd_jobs_with_threshold),
     iteration = "list"
   ),
@@ -911,19 +989,19 @@ list(
   ),
   tar_target(
     sweep_setting_DA_sd_sim,
-    annotate_hmp2_sim_groups(run_simulation_job(
+    run_simulation_job_brito(
       sweep_setting_DA_sd_jobs,
-      intercept_dispersion = sim_params$intercept_disp_realistic,
-      mu_base = sim_params$mu_inv_softmax_base_realistic,
-      k_fixed = 0,
+      dispersion_intercept_by_taxon = sim_params$intercept_disp_realistic_taxon,
+      composition_intercept_by_taxon = sim_params$mu_inv_softmax_base_realistic,
+      mean_dispersion_assoc_slope = 0,
       slope_effects_distribution = sccomp_params$slope_effects_significant,
-      sd_log_overdispersion = sccomp_params$prec_sd_real,
+      sd_log_overdispersion = sim_params$sd_log_overdispersion_realistic,
       n_taxa = sim_params$n_taxa,
       n_samples = sim_params$n_samples,
       n_samples_per_group = sim_params$n_samples_per_group,
       library_size_mean = sim_params$library_size_mean,
       library_size_sd = sim_params$library_size_sd
-    )),
+    ) |> synthetic_sim_add_two_group_factor(c("stool", "oralcavity")),
     pattern = map(sweep_setting_DA_sd_jobs),
     iteration = "list"
   ),
@@ -943,19 +1021,19 @@ list(
   ),
   tar_target(
     sweep_setting_DA_sd_sim_with_threshold,
-    annotate_hmp2_sim_groups(run_simulation_job(
+    run_simulation_job_brito(
       sweep_setting_DA_sd_jobs_with_threshold,
-      intercept_dispersion = sim_params$intercept_disp_realistic,
-      mu_base = sim_params$mu_inv_softmax_base_realistic,
-      k_fixed = 0,
+      dispersion_intercept_by_taxon = sim_params$intercept_disp_realistic_taxon,
+      composition_intercept_by_taxon = sim_params$mu_inv_softmax_base_realistic,
+      mean_dispersion_assoc_slope = 0,
       slope_effects_distribution = sccomp_params$slope_effects_significant,
-      sd_log_overdispersion = sccomp_params$prec_sd_real,
+      sd_log_overdispersion = sim_params$sd_log_overdispersion_realistic,
       n_taxa = sim_params$n_taxa,
       n_samples = sim_params$n_samples,
       n_samples_per_group = sim_params$n_samples_per_group,
       library_size_mean = sim_params$library_size_mean,
       library_size_sd = sim_params$library_size_sd
-    )),
+    ) |> synthetic_sim_add_two_group_factor(c("stool", "oralcavity")),
     pattern = map(sweep_setting_DA_sd_jobs_with_threshold),
     iteration = "list"
   ),
@@ -1024,8 +1102,7 @@ list(
         n_samples_per_group = sim_params$n_samples_per_group,
         library_size_mean = sim_params$library_size_mean,
         library_size_sd = sim_params$library_size_sd
-      )
-      sim_r <- annotate_hmp2_sim_groups(sim_r)
+      ) |> synthetic_sim_add_two_group_factor(c("stool", "oralcavity"))
 
       # Apply filtering (threshold = 0.0 keeps all taxa, effectively unfiltered)
       sim_r$count_long <- filter_by_abundance_cases(sim_r$count_long, threshold = threshold)
@@ -1050,7 +1127,7 @@ list(
             count_long = sim_r$count_long,
             sample_metadata = sim_r$sample_metadata,
             distance_method = dm,
-            group_levels = c("non-IBD", "IBD")
+            group_levels = c("stool", "oralcavity")
           )
         }),
         nm = paste0("permdisp_", methods)
@@ -1062,7 +1139,7 @@ list(
 
         dist_df <- data.frame(distance = bd$distances, group = bd$group)
         group_means <- tapply(dist_df$distance, dist_df$group, mean)
-        centroid_distance <- abs(group_means["IBD"] - group_means["non-IBD"])
+        centroid_distance <- abs(group_means["oralcavity"] - group_means["stool"])
 
         # Centroid separation in PCoA 1-2, scaled by average group hull radius.
         sites <- as.data.frame(vegan::scores(bd, display = "sites"))
@@ -1187,21 +1264,33 @@ Simulation parameters and helper functions are now defined in the targets pipeli
 
 ## Goal
 
-Use **realistic simulation parameters extracted from HMP2 microbiome data** (sccomp fit) to evaluate the performance of various beta-diversity methods under conditions that mirror real microbiome datasets.
+Use **realistic simulation parameters extracted from BritoIL_2016 microbiome data** (sccomp fit) to evaluate the performance of various beta-diversity methods under conditions that mirror real microbiome datasets.
 
 This approach ensures our simulation sweeps reflect:
 
-1. **Real sample and taxa counts** from HMP2
+1. **Real sample and taxa counts** from BritoIL_2016
 2. **Real mean-overdispersion association (k)** estimated from the data
 3. **Real variability around the association (σ)**
 4. **Real baseline abundance distribution** (intercept effects)
 5. **Real slope distribution** (group effects)
 
-## Extract Parameters from HMP2 sccomp Fit
+## Extract Parameters from BritoIL_2016 sccomp Fit
 
 ```{r load-sccomp-results, cache: false}
 # Load the sccomp results
-result <- readRDS("HMP2_sccomp_results.rds")
+result <- readRDS(sccomp_file_path)
+
+# Identify the non-intercept coefficient name dynamically
+# (e.g. groupIBD, body_siteoralcavity, etc.).
+group_parameter <- result |>
+  dplyr::filter(.data$parameter != "(Intercept)") |>
+  dplyr::distinct(.data$parameter) |>
+  dplyr::pull(.data$parameter) |>
+  (\(x) x[[1]])()
+
+if (is.na(group_parameter) || is.null(group_parameter)) {
+  stop("Could not identify non-intercept group parameter in sccomp result.")
+}
 
 # Extract fit object
 fit <- attr(result, "fit")
@@ -1221,41 +1310,30 @@ if (!is.null(model_input) && is.list(model_input)) {
   n_samples_real <- 178
 }
 
-cat("=== HMP2 Dataset Characteristics ===\n")
+cat("=== BritoIL_2016 Dataset Characteristics ===\n")
 cat("Number of samples:", n_samples_real, "\n")
 cat("Number of taxa (genera):", n_taxa_real, "\n")
 ```
 
 ```{r extract-dispersion-params}
 # Extract mean-overdispersion association coefficient (k)
-# 
-# sccomp uses PRECISION parameterization:
-#   log(precision) = prec_coeff[1] + prec_coeff[2] * log(mean)
-#
-# Our simulator uses OVERDISPERSION (sigma) parameterization:
-#   log(sigma) = c - k * log(mean)
-#
-# Since precision ≈ 1/sigma, we have log(sigma) ≈ -log(precision), so:
-#   c = -prec_coeff[1]
-#   k = prec_coeff[2]  (NOT negated! The minus is already in the formula)
-#
-prec_coeff_summary <- fit$summary("prec_coeff")
-
-# prec_coeff[1] is precision intercept, prec_coeff[2] is mean-precision slope
-prec_intercept <- prec_coeff_summary$mean[1]  # ≈ +5.16
-prec_slope <- prec_coeff_summary$mean[2]       # ≈ -0.64
+# from sccomp precision parameterization. Supports legacy (`prec_coeff`)
+# and newer (`prec_intercept` + `prec_slope_*`) fit outputs.
+precision_params <- extract_precision_trend_params(fit)
+prec_intercept <- precision_params$prec_intercept
+prec_slope <- precision_params$prec_slope
 
 # Direct mapping to simulator parameters:
 # k = prec_slope (the simulator formula has -k, so negative prec_slope gives positive effect)
 k_real <- prec_slope  # ≈ -0.64
-k_sd_real <- prec_coeff_summary$sd[2]
+k_sd_real <- precision_params$k_sd_real
 
 # c = -prec_intercept (convert from precision to overdispersion intercept)
 c_real <- -prec_intercept  # ≈ -5.16
 
 cat("\n=== Precision Parameters from sccomp ===\n")
-cat("prec_coeff[1] (precision intercept):", round(prec_intercept, 4), "\n")
-cat("prec_coeff[2] (mean-precision slope):", round(prec_slope, 4), "\n")
+cat("Precision intercept:", round(prec_intercept, 4), "\n")
+cat("Precision slope (", precision_params$slope_parameter, "): ", round(prec_slope, 4), "\n", sep = "")
 
 cat("\n=== Converted to Overdispersion (sigma) Parameters ===\n")
 cat("k (log_dispersion_assoc = prec_slope):", round(k_real, 4), "\n")
@@ -1302,13 +1380,13 @@ p_intercept <- ggplot(data.frame(c_effect = intercept_effects), aes(x = c_effect
 ```{r extract-slope-params}
 # Extract slope (group effect) distribution - ALL taxa
 slope_effects <- result %>%
-  filter(parameter == "groupIBD") %>%
+  filter(parameter == group_parameter) %>%
   pull(c_effect)
 
 # Extract SIGNIFICANT slope effects (credible interval excludes 0)
 # sccomp results have c_lower and c_upper columns for credible intervals
 slope_data <- result %>%
-  filter(parameter == "groupIBD")
+  filter(parameter == group_parameter)
 
 # Check if credible interval columns exist
 if ("c_lower" %in% names(slope_data) && "c_upper" %in% names(slope_data)) {
@@ -1361,7 +1439,7 @@ v_intercept <- result %>%
   pull(v_effect)
 
 v_slope <- result %>%
-  filter(parameter == "groupIBD") %>%
+  filter(parameter == group_parameter) %>%
   pull(v_effect)
 
 cat("\n=== Variability Parameters (v_effect) ===\n")
@@ -1416,9 +1494,9 @@ p_intercept_softmax <- ggplot(data.frame(proportion = intercept_softmax), aes(x 
 # Need to specify formula_composition and from/to groups
 prop_fold_change_data <- sccomp_proportional_fold_change(
   result,
-  formula_composition = ~ group,
-  from = "Healthy",
-  to = "IBD"
+  formula_composition = ~ body_site,
+  from = "stool",
+  to = "oralcavity"
 )
 
 prop_fold_change <- prop_fold_change_data[["proportion_fold_change"]]
@@ -1430,13 +1508,39 @@ if (is.null(prop_fold_change)) {
   )
 }
 
+feature_col <- dplyr::case_when(
+  "cell_group" %in% names(prop_fold_change_data) ~ "cell_group",
+  ".feature" %in% names(prop_fold_change_data) ~ ".feature",
+  "FeatureID" %in% names(prop_fold_change_data) ~ "FeatureID",
+  TRUE ~ NA_character_
+)
+if (is.na(feature_col)) {
+  stop(
+    "Could not find a feature column in proportional fold-change output. ",
+    "Columns: ", paste(names(prop_fold_change_data), collapse = ", ")
+  )
+}
+
 prop_fold_change_tbl <- prop_fold_change_data %>%
-  dplyr::select(cell_group, proportion_fold_change)
+  dplyr::transmute(cell_group = .data[[feature_col]], proportion_fold_change = .data$proportion_fold_change)
+
+result_feature_col <- dplyr::case_when(
+  "cell_group" %in% names(result) ~ "cell_group",
+  ".feature" %in% names(result) ~ ".feature",
+  "FeatureID" %in% names(result) ~ "FeatureID",
+  TRUE ~ NA_character_
+)
+if (is.na(result_feature_col)) {
+  stop(
+    "Could not find a feature column in sccomp `result`. ",
+    "Columns: ", paste(names(result), collapse = ", ")
+  )
+}
 
 significant_taxa <- result %>%
-  dplyr::filter(parameter == "groupIBD") %>%
+  dplyr::filter(parameter == group_parameter) %>%
   dplyr::filter(c_lower > 0 | c_upper < 0) %>%
-  dplyr::select(cell_group)
+  dplyr::transmute(cell_group = .data[[result_feature_col]])
 
 prop_fold_change_sig <- prop_fold_change_tbl %>%
   dplyr::inner_join(significant_taxa, by = "cell_group") %>%
@@ -1852,16 +1956,16 @@ get_sweep_analysis_with_threshold <- function(sweep_res, jobs_with_threshold, se
 
 This section tests method performance when there is **differential overdispersion but NO differential abundance**. This evaluates whether methods correctly detect differential dispersion without producing false positives from composition differences.
 
-All simulations in this section use realistic HMP2 parameters (baseline abundances, mean-OD association k ≈ -0.64, realistic library sizes) with `sd_log_overdispersion = 0` (no random variation in overdispersion across taxa). The same simulation case is used throughout, with different filtering applied for different figures.
+All simulations in this section use realistic BritoIL_2016-derived parameters (baseline abundances, fitted mean-OD association, realistic library sizes) with `sd_log_overdispersion = 0` (no random variation in overdispersion across taxa). The same simulation case is used throughout, with different filtering applied for different figures.
 
 ## Figure 2: Filtered Data (0.1% abundance threshold)
 
 This figure shows method performance on filtered simulated data (taxa with mean abundance <0.1% removed) with differential overdispersion but no differential abundance.
 
 ```{r case-4.5-load-params}
-# Load HMP2 parameters for Figure 2 (Setting DO_no_sd)
+# Load BritoIL_2016 parameters for Figure 2 (Setting DO_no_sd)
 # Load the sccomp results
-result_case4_5 <- readRDS("HMP2_sccomp_results.rds")
+result_case4_5 <- readRDS(sccomp_file_path)
 
 # Extract fit object
 fit_case4_5 <- attr(result_case4_5, "fit")
@@ -1885,8 +1989,8 @@ intercept_effects_case4_5 <- result_case4_5 %>%
   pull(c_effect)
 
 # Extract mean-overdispersion association coefficient (k)
-prec_coeff_summary_case4_5 <- fit_case4_5$summary("prec_coeff")
-prec_slope_case4_5 <- prec_coeff_summary_case4_5$mean[2]  # ≈ -0.64
+precision_params_case4_5 <- extract_precision_trend_params(fit_case4_5)
+prec_slope_case4_5 <- precision_params_case4_5$prec_slope
 k_realistic_case4_5 <- prec_slope_case4_5  # k = prec_slope for simulator
 
 rm(result_case4_5)
@@ -1941,8 +2045,7 @@ sim_realistic_taxa <- simulate_case_realistic_taxa(
   n_samples_per_group = sim_params$n_samples_per_group,
   library_size_mean = sim_params$library_size_mean,
   library_size_sd = sim_params$library_size_sd
-)
-sim_realistic_taxa <- annotate_hmp2_sim_groups(sim_realistic_taxa)
+) |> synthetic_sim_add_two_group_factor(c("stool", "oralcavity"))
 
 # Filter and run analysis to get full results for plotting
 # Use 0.1% threshold for Figure 2 (as stated in the text)
@@ -3133,10 +3236,10 @@ param_summary <- tibble::tibble(
   `sccomp Value` = c(
     as.character(n_samples_real),
     as.character(n_taxa_real),
-    round(prec_coeff_summary$mean[2], 4),
+    round(prec_slope, 4),
     round(k_real, 4),
     round(-k_real, 4),
-    round(prec_coeff_summary$mean[1], 4),
+    round(prec_intercept, 4),
     round(c_real, 4),
     round(prec_sd_real, 4),
     paste0("[", round(min(intercept_effects), 2), ", ", round(max(intercept_effects), 2), "]"),
