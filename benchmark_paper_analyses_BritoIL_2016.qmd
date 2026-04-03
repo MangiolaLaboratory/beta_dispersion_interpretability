@@ -1,7 +1,7 @@
 ---
-title: "Beta-diversity distance benchmark — paper figures"
-subtitle: "PERMDISP (`vegan::betadisper`) distance inputs benchmark"
-author: "Your Name"
+title: "Beta-diversity benchmark — Brito et al. (IL 2016; body site)"
+subtitle: "PERMDISP (`vegan::betadisper`) distances; stool vs oral cavity"
+author: "Mangiola Laboratory"
 date: today
 format:
   html:
@@ -15,7 +15,7 @@ format:
 execute:
   warning: false
   message: false
-  fig.path: "bd_benchmark_paper_figures/"
+  fig.path: "britoil_2016_paper_figures/"
 ---
 
 > **Memory requirement:** Rendering this report can require about **40 GB of RAM**.
@@ -110,7 +110,7 @@ library(lme4)
 source("functions.R")
 
 knitr::opts_chunk$set(
-  fig.path = "ibd_paper_figures/",
+  fig.path = "britoil_2016_paper_figures/",
   dpi = 220
 )
 

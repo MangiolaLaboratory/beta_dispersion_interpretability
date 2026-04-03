@@ -1,7 +1,7 @@
 ---
 title: "Beta-diversity distance benchmark — paper figures"
 subtitle: "PERMDISP (`vegan::betadisper`) distance inputs benchmark"
-author: "Your Name"
+author: "Mangiola Laboratory"
 date: today
 format:
   html:
