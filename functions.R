@@ -157,9 +157,12 @@ calculate_sd_from_overdispersion_ratio <- function(mu, overdispersion_ratio, n) 
 #' @param n_taxa Number of taxa.
 #' @param n_samples Total samples (split by design).
 #' @param sd_log_overdispersion SD of log(sigma) noise (taxon-level heterogeneity).
-#' @param intercept_dispersion Dispersion intercept c. Supported shapes:
-#'   scalar, length n_cohorts, length n_taxa, or length n_cohorts*n_taxa.
-#'   Higher = more overdispersion.
+#' @param intercept_dispersion Length-n_taxa dispersion intercept c in
+#'   log(sigma) = -k*logit(mu) + c + noise; constant across cohorts (replicated to
+#'   each cohort row). Length 1 recycles across taxa.
+#' @param intercept_dispersion_matrix If non-NULL, n_cohorts x n_taxa matrix
+#'   giving c per cohort and taxon; supersedes `intercept_dispersion` (e.g.
+#'   differential overdispersion between groups). Leave NULL for ordinary use.
 #' @param library_size_mean,library_size_sd Library size distribution.
 #' @param design_matrix Optional; default intercept + one group covariate.
 #' @param seed Optional random seed.
@@ -177,9 +180,8 @@ simulate_compositional_bb <- function(
   n_samples,               # Number of samples
   sd_log_overdispersion,   # SD of log(dispersion) around regression line
                           # Controls variability: log(σ) = -k·logit(μ) + c + N(0, sd^2)
-  intercept_dispersion = 2.0,  # Intercept 'c' in log(σ) = -k·logit(μ) + c
-                          # NOTE: σ = dispersion (higher σ = MORE overdispersion)
-                          # Negative values like -1 give LOW overdispersion
+  intercept_dispersion = NULL,  # Length n_taxa (or 1 to recycle); see roxygen
+  intercept_dispersion_matrix = NULL,  # Optional n_cohorts x n_taxa; if set, overrides vector
   library_size_mean = 10000,   # Mean library size per sample
   library_size_sd = 2000,     # SD of library size
   design_matrix = NULL,        # Optional design matrix (n_samples x n_covariates)
@@ -280,9 +282,8 @@ simulate_compositional_bb <- function(
   # Step 2: Simulate log(sigma) at COHORT level
   # ========================================================================
   
-  # Generate random errors for log(sigma) that are TAXON-specific but shared across cohorts.
-  # This ensures that `sd_log_overdispersion > 0` creates baseline OD heterogeneity across taxa
-  # without introducing differential OD between conditions when `intercept_dispersion` is scalar.
+  # Random errors for log(sigma): taxon-specific, shared across cohorts so
+  # sd_log_overdispersion does not by itself induce cohort-varying mean dispersion.
   taxon_log_sigma_errors <- rnorm(n_taxa, mean = 0, sd = sd_log_overdispersion)
   cohort_log_sigma_errors <- matrix(
     taxon_log_sigma_errors,
@@ -290,51 +291,44 @@ simulate_compositional_bb <- function(
     byrow = TRUE
   )
   
-  # Allow flexible dispersion intercept specification:
-  # - scalar: shared across cohorts and taxa
-  # - length n_cohorts: cohort-specific, shared across taxa
-  # - length n_taxa: taxon-specific, shared across cohorts
-  # - length n_cohorts*n_taxa: fully specified cohort x taxon matrix
-  intercept_dispersion_vec <- intercept_dispersion
-  len_c <- length(intercept_dispersion_vec)
-  if (len_c == 1) {
-    intercept_dispersion_matrix <- matrix(
-      intercept_dispersion_vec,
-      nrow = n_cohorts,
-      ncol = n_taxa,
-      byrow = FALSE
-    )
-  } else if (len_c == n_cohorts) {
-    intercept_dispersion_matrix <- matrix(
-      intercept_dispersion_vec,
-      nrow = n_cohorts,
-      ncol = n_taxa,
-      byrow = FALSE
-    )
-  } else if (len_c == n_taxa) {
-    intercept_dispersion_matrix <- matrix(
-      intercept_dispersion_vec,
-      nrow = n_cohorts,
-      ncol = n_taxa,
-      byrow = TRUE
-    )
-  } else if (len_c == (n_cohorts * n_taxa)) {
-    intercept_dispersion_matrix <- matrix(
-      intercept_dispersion_vec,
-      nrow = n_cohorts,
-      ncol = n_taxa,
-      byrow = TRUE
-    )
-  } else {
-    stop(
-      sprintf(
-        paste0(
-          "intercept_dispersion must have length 1, n_cohorts (%d), ",
-          "n_taxa (%d), or n_cohorts*n_taxa (%d); got %d."
-        ),
-        n_cohorts, n_taxa, n_cohorts * n_taxa, len_c
+  if (!is.null(intercept_dispersion_matrix) && !is.null(intercept_dispersion)) {
+    stop("Provide only one of intercept_dispersion or intercept_dispersion_matrix.")
+  }
+  
+  if (!is.null(intercept_dispersion_matrix)) {
+    intercept_dispersion_matrix <- as.matrix(intercept_dispersion_matrix)
+    if (nrow(intercept_dispersion_matrix) != n_cohorts ||
+        ncol(intercept_dispersion_matrix) != n_taxa) {
+      stop(
+        sprintf(
+          "intercept_dispersion_matrix must be n_cohorts x n_taxa (%d x %d); got %d x %d.",
+          n_cohorts, n_taxa,
+          nrow(intercept_dispersion_matrix), ncol(intercept_dispersion_matrix)
+        )
       )
+    }
+    intercept_dispersion_param <- NULL
+  } else {
+    if (is.null(intercept_dispersion)) {
+      intercept_dispersion <- rep(2.0, n_taxa)
+    } else if (length(intercept_dispersion) == 1L) {
+      intercept_dispersion <- rep(intercept_dispersion, n_taxa)
+    }
+    if (length(intercept_dispersion) != n_taxa) {
+      stop(
+        sprintf(
+          "intercept_dispersion must have length n_taxa (%d), or length 1 to recycle; got %d.",
+          n_taxa, length(intercept_dispersion)
+        )
+      )
+    }
+    intercept_dispersion_matrix <- matrix(
+      intercept_dispersion,
+      nrow = n_cohorts,
+      ncol = n_taxa,
+      byrow = TRUE
     )
+    intercept_dispersion_param <- intercept_dispersion
   }
 
   # Calculate log(sigma) at cohort level
@@ -517,7 +511,8 @@ simulate_compositional_bb <- function(
       n_samples = n_samples,
       n_cohorts = n_cohorts,
       sd_log_overdispersion = sd_log_overdispersion,
-      intercept_dispersion = intercept_dispersion_vec,
+      intercept_dispersion = intercept_dispersion_param,
+      intercept_dispersion_matrix = intercept_dispersion_matrix,
       library_size_mean = library_size_mean,
       library_size_sd = library_size_sd
     )
@@ -2339,7 +2334,7 @@ build_simulation_params <- function(
     stop("group_levels must have length 2 (Group==0 then Group==1 in design_matrix_from_groups).")
   }
   set.seed(123)
-  n_taxa <- min(sccomp_params$n_taxa_real, 200)
+  n_taxa <- sccomp_params$n_taxa_real
   n_samples_per_group <- floor(sccomp_params$n_samples_real / 2)
   n_groups <- 2
   n_samples <- n_samples_per_group * n_groups
@@ -2464,7 +2459,7 @@ build_simulation_params_brito <- function(
     stop("group_levels must have length 2 (Group==0 then Group==1 in design_matrix_from_groups).")
   }
   set.seed(123)
-  n_taxa <- min(sccomp_params$n_taxa_real, 200)
+  n_taxa <- sccomp_params$n_taxa_real
   n_samples_per_group <- floor(sccomp_params$n_samples_real / 2)
   n_groups <- 2
   n_samples <- n_samples_per_group * n_groups
@@ -2659,7 +2654,8 @@ simulate_case_realistic_taxa <- function(
   slope_vector,
   mu_inv_softmax,
   log_dispersion_assoc,
-  intercept_dispersion,
+  intercept_dispersion = NULL,
+  intercept_dispersion_matrix = NULL,
   sd_log_overdispersion,
   seed,
   n_taxa,
@@ -2669,6 +2665,11 @@ simulate_case_realistic_taxa <- function(
 ) {
   n_groups <- 2
   n_samples <- n_samples_per_group * n_groups
+  has_vec <- !is.null(intercept_dispersion)
+  has_mat <- !is.null(intercept_dispersion_matrix)
+  if (has_vec == has_mat) {
+    stop("Provide exactly one of intercept_dispersion (length n_taxa) or intercept_dispersion_matrix (2 x n_taxa).")
+  }
   simulate_compositional_bb( # nolint
     slope_vector = slope_vector,
     mu_inv_softmax = mu_inv_softmax,
@@ -2677,6 +2678,7 @@ simulate_case_realistic_taxa <- function(
     n_samples = n_samples,
     sd_log_overdispersion = sd_log_overdispersion,
     intercept_dispersion = intercept_dispersion,
+    intercept_dispersion_matrix = intercept_dispersion_matrix,
     library_size_mean = library_size_mean,
     library_size_sd = library_size_sd,
     design_matrix = design_matrix_from_groups(n_samples_per_group),
@@ -2721,6 +2723,11 @@ run_da_taxa_sweep <- function(
 ) {
   if (length(group_levels) != 2) {
     stop("group_levels must have length 2.")
+  }
+  if (length(intercept_dispersion) == 1L) {
+    intercept_dispersion <- rep(intercept_dispersion, n_taxa)
+  } else if (length(intercept_dispersion) != n_taxa) {
+    stop("run_da_taxa_sweep: intercept_dispersion must have length 1 or n_taxa.")
   }
   standard_distance_methods <- c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
 
@@ -2837,6 +2844,11 @@ run_da_taxa_sweep_abundance_filtered <- function(
 ) {
   if (length(group_levels) != 2) {
     stop("group_levels must have length 2.")
+  }
+  if (length(intercept_dispersion) == 1L) {
+    intercept_dispersion <- rep(intercept_dispersion, n_taxa)
+  } else if (length(intercept_dispersion) != n_taxa) {
+    stop("run_da_taxa_sweep_abundance_filtered: intercept_dispersion must have length 1 or n_taxa.")
   }
   standard_distance_methods <- c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
 
@@ -3065,6 +3077,12 @@ run_simulation_job <- function(
     da_indices <- sample(1:n_taxa, size = min(n_da, n_taxa), replace = FALSE)
     slope_vec[da_indices] <- sample(slope_effects_distribution, length(da_indices), replace = TRUE)
     slope_vec <- slope_vec - mean(slope_vec)
+  }
+
+  if (length(intercept_dispersion) == 1L) {
+    intercept_dispersion <- rep(intercept_dispersion, n_taxa)
+  } else if (length(intercept_dispersion) != n_taxa) {
+    stop("run_simulation_job: intercept_dispersion must have length 1 or n_taxa.")
   }
 
   # Run simulation

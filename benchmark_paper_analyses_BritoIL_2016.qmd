@@ -1642,7 +1642,12 @@ p_combined <- p_intercept_adj | p_intercept_softmax_no_y | p_slope_no_y | p_prop
 p_combined <- p_combined + 
   theme(legend.key.size = unit(0.2, 'cm'))
 
-ggsave("Figure_1.pdf", p_combined, width = 183, height = 183/4, units = "mm")
+p_combined
+```
+
+```{r combined-parameter-plot-save-pdf}
+#| echo: false
+ggsave("Figure_1_BritoIL_2016.pdf", p_combined, width = 183, height = 183/4, units = "mm")
 ```
 
 ## Simulation Setup with Realistic Parameters
@@ -1650,8 +1655,8 @@ ggsave("Figure_1.pdf", p_combined, width = 183, height = 183/4, units = "mm")
 ```{r simulation-params}
 set.seed(123)
 
-# Use realistic dimensions (but cap for computational feasibility)
-n_taxa <- min(n_taxa_real, 200)  # Cap at 200 taxa
+# Match sccomp fit: full taxon count (analyses use all taxa that pass abundance filters)
+n_taxa <- n_taxa_real
 n_samples_per_group <- floor(n_samples_real / 2)  # Split into 2 groups
 n_groups <- 2
 n_samples <- n_samples_per_group * n_groups
@@ -1661,7 +1666,7 @@ library_size_mean <- 15125  # From HMP2 average total counts per sample
 library_size_sd <- 5000
 
 cat("=== Simulation Parameters ===\n")
-cat("n_taxa:", n_taxa, "(capped from", n_taxa_real, ")\n")
+cat("n_taxa:", n_taxa, "(from fitted model)\n")
 cat("n_samples_per_group:", n_samples_per_group, "\n")
 cat("Total n_samples:", n_samples, "\n")
 
@@ -2545,8 +2550,11 @@ fig_2 <- (fig_2_row1_new / fig_2_case4_5) +
   theme(plot.margin = margin(0, 0, 0, 0, "pt"), legend.key.size = unit(0.2, 'cm'), legend.position = "bottom")
 
 fig_2
+```
 
-ggsave("Figure_2.pdf", fig_2, width = 183, height = 138, units = "mm")
+```{r fig-2-save-pdf}
+#| echo: false
+ggsave("Figure_2_BritoIL_2016.pdf", fig_2, width = 183, height = 138, units = "mm")
 ```
 
 ```{r cleanup-after-figure-2}
@@ -3070,8 +3078,11 @@ p_figure3 <- p_figure3 +
   theme(plot.margin = margin(0, 0, 0, 0, "pt"), legend.key.size = unit(0.2, 'cm'), legend.position = "bottom")
 
 p_figure3
+```
 
-ggsave("Figure_3.pdf", p_figure3, width = 183, height = 230, units = "mm")
+```{r figure-3-save-pdf}
+#| echo: false
+ggsave("Figure_3_BritoIL_2016.pdf", p_figure3, width = 183, height = 230, units = "mm")
 ```
 
 ```{r cleanup-after-figure-3}
@@ -3192,8 +3203,11 @@ fig_supp_3 <- p_setting_DA_no_sd_top / p_setting_DA_sd_top +
   theme(plot.margin = margin(0, 0, 0, 0, "pt"), legend.key.size = unit(0.2, 'cm'), legend.position = "bottom")
 
 fig_supp_3
+```
 
-ggsave("Supp_Figure_3.pdf", fig_supp_3, width = 183, height = 230, units = "mm")
+```{r supp-fig-3-save-pdf}
+#| echo: false
+ggsave("Supp_Figure_3_BritoIL_2016.pdf", fig_supp_3, width = 183, height = 230, units = "mm")
 ```
 
 ```{r cleanup-after-supp-figure-3}

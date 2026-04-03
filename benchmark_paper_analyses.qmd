@@ -1546,8 +1546,8 @@ ggsave("Figure_1.pdf", p_combined, width = 183, height = 183/4, units = "mm")
 ```{r simulation-params}
 set.seed(123)
 
-# Use realistic dimensions (but cap for computational feasibility)
-n_taxa <- min(n_taxa_real, 200)  # Cap at 200 taxa
+# Match sccomp fit: full taxon count (analyses use all taxa that pass abundance filters)
+n_taxa <- n_taxa_real
 n_samples_per_group <- floor(n_samples_real / 2)  # Split into 2 groups
 n_groups <- 2
 n_samples <- n_samples_per_group * n_groups
@@ -1557,7 +1557,7 @@ library_size_mean <- 15125  # From HMP2 average total counts per sample
 library_size_sd <- 5000
 
 cat("=== Simulation Parameters ===\n")
-cat("n_taxa:", n_taxa, "(capped from", n_taxa_real, ")\n")
+cat("n_taxa:", n_taxa, "(from fitted model)\n")
 cat("n_samples_per_group:", n_samples_per_group, "\n")
 cat("Total n_samples:", n_samples, "\n")
 
