@@ -592,7 +592,7 @@ plot_mean_dispersion_scatter <- function(sim_result, case_label = "Case", cols =
     )
 }
 
-# Distance input helpers live in `_targets.R` (analysis only).
+# Distance input helpers live in `_targets_BritoIL_2016.R` (analysis only).
 
 # Method label functions
 pretty_method_label <- function(method_key) {
@@ -724,12 +724,14 @@ if (!file.exists(sccomp_file_path)) {
     cores = max(1, parallelly::availableCores() - 1), 
     bimodal_mean_variability_association = TRUE,
     verbose = TRUE, 
-    max_sampling_iterations = 4000,
+    max_sampling_iterations = 3000,
     sig_figs = 6, 
+    portable = FALSE,
 
     # TEST
     exclude_priors = TRUE
-  )
+  ) |>
+    sccomp_test(contrasts = "body_site")
   saveRDS(fit, sccomp_file_path)
   message("Saved sccomp fit to: ", sccomp_file_path)
 } else {
@@ -746,7 +748,7 @@ fit <- readRDS(sccomp_file_path)
 # sccomp_test() + sccomp_plot_intervals_2D() can exceed R mem.maxVSize() on large posteriors.
 # Run this chunk interactively (set eval: true) if you have enough RAM.
 fit |>
-  sccomp_test() |>
+  sccomp_test(contrasts = "body_siteoralcavity") |>
   sccomp_plot_intervals_2D(factor = "body_site")
 ```
 
@@ -1211,26 +1213,22 @@ list(
 )
 
 
-}, script = "_targets.R", ask=FALSE)
+}, script = "_targets_BritoIL_2016.R", ask=FALSE)
 
-# Run the targets pipeline (omit if you hit mem.maxVSize(): run `targets::tar_make()` separately, then render with skip)
-if (nzchar(Sys.getenv("QUARTO_SKIP_TARGETS_MAKE", ""))) {
-  message("Skipping targets::tar_make() — QUARTO_SKIP_TARGETS_MAKE is set; using existing _targets/ store.")
-} else {
-  targets::tar_make(script = "_targets.R")
-}
+# Run the targets pipeline
+targets::tar_make(script = "_targets_BritoIL_2016.R")
 ```
 
 ```{r targets-load}
 # Set up targets configuration and load basic parameters used throughout
 # Individual chunks will load their specific targets as needed
-targets_script <- file.path(getwd(), "_targets.R")
+targets_script <- file.path(getwd(), "_targets_BritoIL_2016.R")
 if (!file.exists(targets_script)) {
   qmd_dir <- dirname(knitr::current_input(dir = TRUE))
-  targets_script <- file.path(qmd_dir, "_targets.R")
+  targets_script <- file.path(qmd_dir, "_targets_BritoIL_2016.R")
 }
 targets::tar_config_set(script = targets_script)
-# Source helper functions from _targets.R AFTER tar_script/tar_make.
+# Source helper functions from _targets_BritoIL_2016.R AFTER tar_script/tar_make.
 source(targets_script)
 
 # Load basic parameters that are used in many places
@@ -1273,7 +1271,7 @@ rep_seeds_auc <- sim_params$rep_seeds_auc
 ## Shared simulation settings
 
 Simulation parameters and helper functions are now defined in the targets pipeline
-(`_targets.R`) and loaded via the `targets-load` chunk.
+(`_targets_BritoIL_2016.R`) and loaded via the `targets-load` chunk.
 
 
 
@@ -1731,12 +1729,12 @@ perm_reps_auc <- 199
 rep_seeds_auc <- 12000 + seq_len(n_reps_auc)
 ```
 
-Design matrix helpers are now defined in `_targets.R`.
+Design matrix helpers are now defined in `_targets_BritoIL_2016.R`.
 
-Helper functions are now defined in `_targets.R`.
+Helper functions are now defined in `_targets_BritoIL_2016.R`.
 
 ```{r simulation-function}
-# Simulation functions for sweeps now live in the targets pipeline (`_targets.R`).
+# Simulation functions for sweeps now live in the targets pipeline (`_targets_BritoIL_2016.R`).
 # Function to create composite plot for DA taxa sweep
 plot_da_taxa_sweep_results <- function(
   fpr_data,
@@ -2027,10 +2025,10 @@ sweep_setting_DO_no_sd_jobs <- targets::tar_read("sweep_setting_DO_no_sd_jobs")
 
 # Allow running this chunk standalone in IDE sessions where setup may be skipped.
 if (!exists("simulate_case_realistic_taxa")) {
-  targets_script_local <- file.path(getwd(), "_targets.R")
+  targets_script_local <- file.path(getwd(), "_targets_BritoIL_2016.R")
   if (!file.exists(targets_script_local)) {
     qmd_dir_local <- dirname(knitr::current_input(dir = TRUE))
-    targets_script_local <- file.path(qmd_dir_local, "_targets.R")
+    targets_script_local <- file.path(qmd_dir_local, "_targets_BritoIL_2016.R")
   }
   source(targets_script_local)
 }
@@ -2054,7 +2052,7 @@ intercept_disp_cohort <- c(intercept_base, intercept_base + target_delta)
 intercept_disp_matrix <- outer(intercept_disp_cohort, rep(1, sim_params$n_taxa))
 base_seed <- unique(sweep_setting_DO_no_sd_jobs$seed)[1]
 
-source("_targets.R")
+source("_targets_BritoIL_2016.R")
 
 sim_realistic_taxa <- simulate_case_realistic_taxa(
   slope_vector = rep(0, sim_params$n_taxa),  # No DA
