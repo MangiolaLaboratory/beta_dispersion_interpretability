@@ -220,7 +220,10 @@ plot_betadisper_pcoa_and_boxplot <- function(
   hull = TRUE,
   segments = TRUE,
   label = TRUE,
-  cols = c("non-IBD" = "#E74C3C", "IBD" = "#3498DB"),
+  cols = c(
+    stool = RColorBrewer::brewer.pal(11, "PRGn")[10],
+    oralcavity = RColorBrewer::brewer.pal(11, "PRGn")[2]
+  ),
   p_value = NULL,
   p_se = NULL,
   n_perm = NULL,
@@ -236,7 +239,7 @@ plot_betadisper_pcoa_and_boxplot <- function(
   if (ncol(sites) < 2) stop("betadisper site scores have < 2 dimensions.")
   colnames(sites)[1:2] <- c("Axis1", "Axis2")
   sites$group <- factor(bd$group, levels = levels(bd$group))
-  # Ensure IBD is drawn after non-IBD (on top) in layered geoms.
+  # Draw second factor level on top in layered geoms.
   sites <- sites %>% dplyr::arrange(.data$group)
 
   centroids <- as.data.frame(vegan::scores(bd, display = "centroids"))
@@ -245,7 +248,8 @@ plot_betadisper_pcoa_and_boxplot <- function(
   centroids$group <- factor(rownames(centroids), levels = levels(bd$group))
   centroids <- centroids %>% dplyr::arrange(.data$group)
 
-  # `cols` is a named vector mapping non-IBD/IBD to colors
+  gl <- levels(sites$group)
+  shape_vals <- stats::setNames(rep_len(c(16L, 17L, 15L, 18L), length(gl)), gl)
 
   seg_df <- NULL
   if (segments) {
@@ -295,19 +299,16 @@ plot_betadisper_pcoa_and_boxplot <- function(
     ) +
     scale_color_manual(
       values = cols,
-      labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"),
       name = NULL,
       guide = if (show_group_legend) "legend" else "none"
     ) +
     scale_shape_manual(
-      values = c("non-IBD" = 16, "IBD" = 17),  # 16 = filled circle, 17 = filled triangle
-      labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"),
+      values = shape_vals,
       name = NULL,
       guide = if (show_group_legend) "legend" else "none"
     ) +
     scale_fill_manual(
       values = cols,
-      labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"),
       name = NULL,
       guide = "none"  # Fill is only for polygon shading, not in legend
     ) +
@@ -321,7 +322,7 @@ plot_betadisper_pcoa_and_boxplot <- function(
     theme(aspect.ratio = NULL)  # Allow PCoA plot to resize based on patchwork width
 
   dist_df <- tibble::tibble(
-    group = factor(bd$group, levels = c("non-IBD", "IBD")),
+    group = factor(bd$group, levels = gl),
     distance = unname(bd$distances)
   )
 
@@ -347,7 +348,6 @@ plot_betadisper_pcoa_and_boxplot <- function(
       geom_boxplot(width = 0.5, outlier.size = 0.1, alpha = 0.85, linewidth = 0.25, outlier.stroke = 0) +
       geom_jitter(width = 0.12, size = 1.0, alpha = 0.25, stroke = 0) +
       scale_fill_manual(values = cols, guide = "none") +
-      scale_x_discrete(labels = c("non-IBD" = "non-IBD", "IBD" = "IBD")) +
       labs(x = NULL, y = "Distance to centroid") +
       {if (!is.null(ann_label)) annotate(
         geom = "text",
@@ -369,7 +369,6 @@ plot_betadisper_pcoa_and_boxplot <- function(
       geom_boxplot(width = 0.5, outlier.size = 0.1, alpha = 0.85, linewidth = 0.25, outlier.stroke = 0) +
       geom_jitter(width = 0.12, size = 1.0, alpha = 0.25, stroke = 0) +
       scale_fill_manual(values = cols, guide = "none") +
-      scale_x_discrete(labels = c("non-IBD" = "non-IBD", "IBD" = "IBD")) +
       labs(x = NULL, y = "Distance to centroid") +
       {if (!is.null(ann_label)) annotate(
         geom = "text",
@@ -445,9 +444,9 @@ compute_centroid_distance_pct_hull_radius <- function(bd) {
 format_analysis_results_for_plotting <- function(
   analysis_results,
   case_label,
-  standard_distance_methods = c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
+  standard_distance_methods = c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger"),
+  group_levels = c("stool", "oralcavity")
 ) {
-  group_levels <- c("non-IBD", "IBD")
 
   if (!is.list(analysis_results) || !"method_results" %in% names(analysis_results)) {
     stop("analysis_results must be output from run_analysis_job(return_full = TRUE)")
@@ -510,9 +509,20 @@ format_analysis_results_for_plotting <- function(
 plot_alpha_diversity_scatter <- function(sim_result, case_label = "Case") {
   # This is the same style used in the discovery report:
   # `print(alpha_1$plot)` from `run_alpha_diversity_analysis()`.
-  alpha <- run_alpha_diversity_analysis(sim_result, case_label = case_label)
-  # Default color values (will be overridden if scale_color_manual is applied after)
-  color_vals <- c("non-IBD" = "#E74C3C", "IBD" = "#3498DB")
+  # BritoIL: two body sites (hardcoded for this QMD only).
+  alpha <- run_alpha_diversity_analysis(
+    sim_result,
+    case_label = case_label,
+    group_levels = c("stool", "oralcavity"),
+    group_colors = c(
+      stool = RColorBrewer::brewer.pal(11, "PRGn")[10],
+      oralcavity = RColorBrewer::brewer.pal(11, "PRGn")[2]
+    )
+  )
+  color_vals <- c(
+    stool = RColorBrewer::brewer.pal(11, "PRGn")[10],
+    oralcavity = RColorBrewer::brewer.pal(11, "PRGn")[2]
+  )
   # Update plot to use theme_multipanel and remove titles/subtitles
   # Note: stat_ellipse linewidth is set in functions.R
   # Add marginal densities using ggside (fill will inherit from color scale if overridden)
@@ -542,8 +552,8 @@ plot_alpha_diversity_scatter <- function(sim_result, case_label = "Case") {
 plot_mean_dispersion_scatter <- function(sim_result, case_label = "Case", cols = NULL) {
   if (is.null(cols)) {
     cols <- c(
-      "non-IBD" = RColorBrewer::brewer.pal(11, "PRGn")[10],
-      "IBD" = RColorBrewer::brewer.pal(11, "PRGn")[2]
+      stool = RColorBrewer::brewer.pal(11, "PRGn")[10],
+      oralcavity = RColorBrewer::brewer.pal(11, "PRGn")[2]
     )
   }
 
@@ -569,7 +579,7 @@ plot_mean_dispersion_scatter <- function(sim_result, case_label = "Case", cols =
   ggplot(d, aes(x = taxon_id, y = mean_prop, ymin = p_low, ymax = p_high, color = group)) +
     ggplot2::geom_linerange(position = ggplot2::position_dodge(width = 0.6), linewidth = 0.25, alpha = 0.8) +
     ggplot2::geom_point(position = ggplot2::position_dodge(width = 0.6), size = 0.8, stroke = 0) +
-    ggplot2::scale_color_manual(values = cols, labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"), name = NULL) +
+    ggplot2::scale_color_manual(values = cols, name = NULL) +
     ggplot2::scale_y_continuous(labels = function(x) dropLeadingZero(scales::percent_format(accuracy = 1)(x))) +
     ggplot2::labs(
       x = "Taxon (ordered by mean proportion)",
@@ -732,9 +742,12 @@ fit <- readRDS(sccomp_file_path)
 
 ## QC plots
 ```{r qc-plot}
+#| eval: false
+# sccomp_test() + sccomp_plot_intervals_2D() can exceed R mem.maxVSize() on large posteriors.
+# Run this chunk interactively (set eval: true) if you have enough RAM.
 fit |>
-sccomp_test() |>
-sccomp:::plot_2D_intervals(factor="body_site")
+  sccomp_test() |>
+  sccomp_plot_intervals_2D(factor = "body_site")
 ```
 
 
@@ -1200,8 +1213,12 @@ list(
 
 }, script = "_targets.R", ask=FALSE)
 
-# Run the targets pipeline
-targets::tar_make(script = "_targets.R")
+# Run the targets pipeline (omit if you hit mem.maxVSize(): run `targets::tar_make()` separately, then render with skip)
+if (nzchar(Sys.getenv("QUARTO_SKIP_TARGETS_MAKE", ""))) {
+  message("Skipping targets::tar_make() — QUARTO_SKIP_TARGETS_MAKE is set; using existing _targets/ store.")
+} else {
+  targets::tar_make(script = "_targets.R")
+}
 ```
 
 ```{r targets-load}
@@ -1546,7 +1563,7 @@ prop_fold_change_sig <- prop_fold_change_tbl %>%
   dplyr::inner_join(significant_taxa, by = "cell_group") %>%
   dplyr::mutate(abs_fold_change = abs(proportion_fold_change))
 
-cat("\n=== Absolute Proportion Fold Change (significant group IBD only) ===\n")
+cat("\n=== Absolute Proportion Fold Change (significant body_site effects) ===\n")
 cat("N significant taxa:", nrow(prop_fold_change_sig), "\n")
 cat("Mean:", round(mean(prop_fold_change_sig$abs_fold_change, na.rm = TRUE), 4), "\n")
 cat("SD:", round(sd(prop_fold_change_sig$abs_fold_change, na.rm = TRUE), 4), "\n")
@@ -1660,7 +1677,7 @@ n_taxa <- n_taxa_real
 n_samples_per_group <- floor(n_samples_real / 2)  # Split into 2 groups
 n_groups <- 2
 n_samples <- n_samples_per_group * n_groups
-group_levels <- c("non-IBD", "IBD")  # Matches simulation output
+group_levels <- c("stool", "oralcavity")  # Matches simulation output (body_site)
 
 library_size_mean <- 15125  # From HMP2 average total counts per sample
 library_size_sd <- 5000
@@ -2133,8 +2150,8 @@ sweep_setting_DO_no_sd_fpr <- targets::tar_read("sweep_setting_DO_no_sd_fpr")
 ```{r fig-2-components}
 # Figure 2 components (Setting DO_no_sd filtered)
 cols_prgn <- c(
-  "non-IBD" = RColorBrewer::brewer.pal(11, "PRGn")[10], # green
-  "IBD" = RColorBrewer::brewer.pal(11, "PRGn")[2]   # purple
+  stool = RColorBrewer::brewer.pal(11, "PRGn")[10],
+  oralcavity = RColorBrewer::brewer.pal(11, "PRGn")[2]
 )
 
 p_std_realistic_taxa_filtered <- cmp_realistic_taxa_filtered$stats %>% dplyr::filter(method == "permdisp_bray") %>% dplyr::pull(p_value)
@@ -2172,7 +2189,7 @@ distances_non_ibd_realistic_taxa_filtered <- cmp_realistic_taxa_filtered$distanc
 p_boxplots_all_realistic_taxa_filtered <- ggplot(distances_non_ibd_realistic_taxa_filtered, aes(x = method_label, y = distance, fill = group)) +
   geom_boxplot(width = 0.5, outlier.size = 0.1, alpha = 0.85, linewidth = 0.25, outlier.stroke = 0, position = position_dodge(width = 0.8)) +
   geom_jitter(size = 1.0, alpha = 0.25, stroke = 0, position = position_jitterdodge(dodge.width = 0.8, jitter.width = 0.12)) +
-  scale_fill_manual(values = cols_prgn, labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"), name = NULL) +
+  scale_fill_manual(values = cols_prgn, name = NULL) +
   facet_wrap(~ method_group, nrow = 1, scales = "free", space = "free_x") +
   labs(x = NULL, y = "Distance to centroid") +
   theme_multipanel +
@@ -2598,11 +2615,11 @@ mu_base_DA_sd <- mu_inv_softmax_base_realistic
 k_fixed_DA_sd <- 0
 
 standard_distance_methods_setting5 <- c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
-group_levels <- c("non-IBD", "IBD")
+group_levels <- c("stool", "oralcavity")
 
 cols_prgn_setting5 <- c(
-  "non-IBD" = RColorBrewer::brewer.pal(11, "PRGn")[10],
-  "IBD" = RColorBrewer::brewer.pal(11, "PRGn")[2]
+  stool = RColorBrewer::brewer.pal(11, "PRGn")[10],
+  oralcavity = RColorBrewer::brewer.pal(11, "PRGn")[2]
 )
 
 filter_by_abundance_for_plot <- function(count_long, min_abundance) {
@@ -3017,7 +3034,7 @@ distances_non_ibd_40_da <- cmp_40_da$distances_long %>%
 p_boxplots_40_da <- ggplot(distances_non_ibd_40_da, aes(x = method_label, y = distance, fill = group)) +
   geom_boxplot(width = 0.5, outlier.size = 0.1, alpha = 0.85, linewidth = 0.25, outlier.stroke = 0, position = position_dodge(width = 0.8)) +
   geom_jitter(size = 1.0, alpha = 0.25, stroke = 0, position = position_jitterdodge(dodge.width = 0.8, jitter.width = 0.12)) +
-  scale_fill_manual(values = cols_prgn_setting5, labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"), name = NULL) +
+  scale_fill_manual(values = cols_prgn_setting5, name = NULL) +
   facet_wrap(~ method_group, nrow = 1, scales = "free", space = "free_x") +
   labs(x = NULL, y = "Distance to centroid") +
   theme_multipanel +
