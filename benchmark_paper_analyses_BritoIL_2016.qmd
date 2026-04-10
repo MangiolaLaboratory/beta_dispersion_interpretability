@@ -220,7 +220,10 @@ plot_betadisper_pcoa_and_boxplot <- function(
   hull = TRUE,
   segments = TRUE,
   label = TRUE,
-  cols = c("non-IBD" = "#E74C3C", "IBD" = "#3498DB"),
+  cols = c(
+    stool = RColorBrewer::brewer.pal(11, "PRGn")[10],
+    oralcavity = RColorBrewer::brewer.pal(11, "PRGn")[2]
+  ),
   p_value = NULL,
   p_se = NULL,
   n_perm = NULL,
@@ -236,7 +239,7 @@ plot_betadisper_pcoa_and_boxplot <- function(
   if (ncol(sites) < 2) stop("betadisper site scores have < 2 dimensions.")
   colnames(sites)[1:2] <- c("Axis1", "Axis2")
   sites$group <- factor(bd$group, levels = levels(bd$group))
-  # Ensure IBD is drawn after non-IBD (on top) in layered geoms.
+  # Draw second factor level on top in layered geoms.
   sites <- sites %>% dplyr::arrange(.data$group)
 
   centroids <- as.data.frame(vegan::scores(bd, display = "centroids"))
@@ -245,7 +248,8 @@ plot_betadisper_pcoa_and_boxplot <- function(
   centroids$group <- factor(rownames(centroids), levels = levels(bd$group))
   centroids <- centroids %>% dplyr::arrange(.data$group)
 
-  # `cols` is a named vector mapping non-IBD/IBD to colors
+  gl <- levels(sites$group)
+  shape_vals <- stats::setNames(rep_len(c(16L, 17L, 15L, 18L), length(gl)), gl)
 
   seg_df <- NULL
   if (segments) {
@@ -295,19 +299,16 @@ plot_betadisper_pcoa_and_boxplot <- function(
     ) +
     scale_color_manual(
       values = cols,
-      labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"),
       name = NULL,
       guide = if (show_group_legend) "legend" else "none"
     ) +
     scale_shape_manual(
-      values = c("non-IBD" = 16, "IBD" = 17),  # 16 = filled circle, 17 = filled triangle
-      labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"),
+      values = shape_vals,
       name = NULL,
       guide = if (show_group_legend) "legend" else "none"
     ) +
     scale_fill_manual(
       values = cols,
-      labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"),
       name = NULL,
       guide = "none"  # Fill is only for polygon shading, not in legend
     ) +
@@ -321,7 +322,7 @@ plot_betadisper_pcoa_and_boxplot <- function(
     theme(aspect.ratio = NULL)  # Allow PCoA plot to resize based on patchwork width
 
   dist_df <- tibble::tibble(
-    group = factor(bd$group, levels = c("non-IBD", "IBD")),
+    group = factor(bd$group, levels = gl),
     distance = unname(bd$distances)
   )
 
@@ -347,7 +348,6 @@ plot_betadisper_pcoa_and_boxplot <- function(
       geom_boxplot(width = 0.5, outlier.size = 0.1, alpha = 0.85, linewidth = 0.25, outlier.stroke = 0) +
       geom_jitter(width = 0.12, size = 1.0, alpha = 0.25, stroke = 0) +
       scale_fill_manual(values = cols, guide = "none") +
-      scale_x_discrete(labels = c("non-IBD" = "non-IBD", "IBD" = "IBD")) +
       labs(x = NULL, y = "Distance to centroid") +
       {if (!is.null(ann_label)) annotate(
         geom = "text",
@@ -369,7 +369,6 @@ plot_betadisper_pcoa_and_boxplot <- function(
       geom_boxplot(width = 0.5, outlier.size = 0.1, alpha = 0.85, linewidth = 0.25, outlier.stroke = 0) +
       geom_jitter(width = 0.12, size = 1.0, alpha = 0.25, stroke = 0) +
       scale_fill_manual(values = cols, guide = "none") +
-      scale_x_discrete(labels = c("non-IBD" = "non-IBD", "IBD" = "IBD")) +
       labs(x = NULL, y = "Distance to centroid") +
       {if (!is.null(ann_label)) annotate(
         geom = "text",
@@ -445,9 +444,9 @@ compute_centroid_distance_pct_hull_radius <- function(bd) {
 format_analysis_results_for_plotting <- function(
   analysis_results,
   case_label,
-  standard_distance_methods = c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
+  standard_distance_methods = c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger"),
+  group_levels = c("stool", "oralcavity")
 ) {
-  group_levels <- c("non-IBD", "IBD")
 
   if (!is.list(analysis_results) || !"method_results" %in% names(analysis_results)) {
     stop("analysis_results must be output from run_analysis_job(return_full = TRUE)")
@@ -510,9 +509,20 @@ format_analysis_results_for_plotting <- function(
 plot_alpha_diversity_scatter <- function(sim_result, case_label = "Case") {
   # This is the same style used in the discovery report:
   # `print(alpha_1$plot)` from `run_alpha_diversity_analysis()`.
-  alpha <- run_alpha_diversity_analysis(sim_result, case_label = case_label)
-  # Default color values (will be overridden if scale_color_manual is applied after)
-  color_vals <- c("non-IBD" = "#E74C3C", "IBD" = "#3498DB")
+  # BritoIL: two body sites (hardcoded for this QMD only).
+  alpha <- run_alpha_diversity_analysis(
+    sim_result,
+    case_label = case_label,
+    group_levels = c("stool", "oralcavity"),
+    group_colors = c(
+      stool = RColorBrewer::brewer.pal(11, "PRGn")[10],
+      oralcavity = RColorBrewer::brewer.pal(11, "PRGn")[2]
+    )
+  )
+  color_vals <- c(
+    stool = RColorBrewer::brewer.pal(11, "PRGn")[10],
+    oralcavity = RColorBrewer::brewer.pal(11, "PRGn")[2]
+  )
   # Update plot to use theme_multipanel and remove titles/subtitles
   # Note: stat_ellipse linewidth is set in functions.R
   # Add marginal densities using ggside (fill will inherit from color scale if overridden)
@@ -542,8 +552,8 @@ plot_alpha_diversity_scatter <- function(sim_result, case_label = "Case") {
 plot_mean_dispersion_scatter <- function(sim_result, case_label = "Case", cols = NULL) {
   if (is.null(cols)) {
     cols <- c(
-      "non-IBD" = RColorBrewer::brewer.pal(11, "PRGn")[10],
-      "IBD" = RColorBrewer::brewer.pal(11, "PRGn")[2]
+      stool = RColorBrewer::brewer.pal(11, "PRGn")[10],
+      oralcavity = RColorBrewer::brewer.pal(11, "PRGn")[2]
     )
   }
 
@@ -569,7 +579,7 @@ plot_mean_dispersion_scatter <- function(sim_result, case_label = "Case", cols =
   ggplot(d, aes(x = taxon_id, y = mean_prop, ymin = p_low, ymax = p_high, color = group)) +
     ggplot2::geom_linerange(position = ggplot2::position_dodge(width = 0.6), linewidth = 0.25, alpha = 0.8) +
     ggplot2::geom_point(position = ggplot2::position_dodge(width = 0.6), size = 0.8, stroke = 0) +
-    ggplot2::scale_color_manual(values = cols, labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"), name = NULL) +
+    ggplot2::scale_color_manual(values = cols, name = NULL) +
     ggplot2::scale_y_continuous(labels = function(x) dropLeadingZero(scales::percent_format(accuracy = 1)(x))) +
     ggplot2::labs(
       x = "Taxon (ordered by mean proportion)",
@@ -749,8 +759,8 @@ fit <- readRDS(sccomp_file_path)
 ## QC plots
 ```{r qc-plot}
 fit |>
-sccomp_test(contrasts = "body_siteoralcavity") |>
-sccomp:::plot_2D_intervals(factor="body_site")
+  sccomp_test(contrasts = "body_siteoralcavity") |>
+  sccomp_plot_intervals_2D(factor = "body_site")
 ```
 
 
@@ -859,13 +869,25 @@ list(
     "BritoIL_2016_sccomp_results.rds",
     format = "file"
   ),
+  # Simulation/analysis helpers live in functions.R; track as a file target so changing the
+  # sim algorithm invalidates downstream targets (source() alone is invisible to {targets}).
+  tar_target(
+    functions_r,
+    "functions.R",
+    format = "file"
+  ),
   tar_target(
     sccomp_result,
     load_sccomp_result(sccomp_result_file)
   ),
   tar_target(
     sccomp_params,
-    extract_sccomp_params_brito(sccomp_result)
+    {
+      functions_r
+      # Dispersion for Brito sims: taxon intercepts from v_effect (log-sigma mapping), not prec_intercept.
+      # DA/DA_sd sweeps use mean_dispersion_assoc_slope = 0; keep k_real = 0 so DO paths match.
+      extract_sccomp_params_brito(sccomp_result)
+    }
   ),
   # Number of simulation replications (set to small number for development)
   tar_target(
@@ -1110,7 +1132,7 @@ list(
       sim_r <- simulate_case_realistic_taxa(
         slope_vector = rep(0, sim_params$n_taxa),
         mu_inv_softmax = sim_params$mu_inv_softmax_base_realistic,
-        log_dispersion_assoc = sccomp_params$k_real,
+        log_dispersion_assoc = 0,
         intercept_dispersion_matrix = intercept_disp_matrix,
         sd_log_overdispersion = 0,
         seed = seed,
@@ -1299,7 +1321,7 @@ result <- readRDS(sccomp_file_path)
 # Identify the non-intercept coefficient name dynamically
 # (e.g. groupIBD, body_siteoralcavity, etc.).
 group_parameter <- result |>
-  dplyr::filter(.data$parameter != "(Intercept)") |>
+  dplyr::filter(.data$parameter != "Intercept") |>
   dplyr::distinct(.data$parameter) |>
   dplyr::pull(.data$parameter) |>
   (\(x) x[[1]])()
@@ -1333,8 +1355,7 @@ cat("Number of taxa (genera):", n_taxa_real, "\n")
 
 ```{r extract-dispersion-params}
 # Extract mean-overdispersion association coefficient (k)
-# from sccomp precision parameterization. Supports legacy (`prec_coeff`)
-# and newer (`prec_intercept` + `prec_slope_*`) fit outputs.
+# from sccomp precision parameterization (`prec_intercept_j` / `prec_slope_j`, or unindexed names).
 precision_params <- extract_precision_trend_params(fit)
 prec_intercept <- precision_params$prec_intercept
 prec_slope <- precision_params$prec_slope
@@ -1372,7 +1393,7 @@ cat("SD:", round(prec_sd_summary$sd[1], 4), "\n")
 ```{r extract-baseline-params}
 # Extract baseline abundance distribution (intercept effects for composition)
 intercept_effects <- result %>%
-  filter(parameter == "(Intercept)") %>%
+  filter(parameter == "Intercept") %>%
   pull(c_effect)
 
 cat("\n=== Baseline Abundance Distribution (Intercept c_effect) ===\n")
@@ -1451,7 +1472,7 @@ p_slope <- ggplot(data.frame(c_effect = slope_effects), aes(x = c_effect)) +
 # Extract variability parameters (v_effect for intercept and slope)
 # These are the per-taxon variability effects in sccomp
 v_intercept <- result %>%
-  filter(parameter == "(Intercept)") %>%
+  filter(parameter == "Intercept") %>%
   pull(v_effect)
 
 v_slope <- result %>%
@@ -1476,6 +1497,9 @@ cat("\nNote: This is very low overdispersion (σ ≈ 0.006), consistent with hig
 ```
 
 ```{r additional-parameter-plots}
+#| eval: !expr Sys.info()[["sysname"]] != "Darwin"
+# CmdStan draw CSVs are not available locally on macOS (absolute paths from Linux cluster).
+
 # 1. Intercept c_effect in softmax scale (proportions)
 # Convert intercept effects to proportions using inv_softmax
 # We need to convert all intercept effects together to get proper proportions
@@ -1506,8 +1530,6 @@ p_intercept_softmax <- ggplot(data.frame(proportion = intercept_softmax), aes(x 
   theme_multipanel
 
 # 2. Effect in proportion fold change using sccomp_proportional_fold_change
-# Calculate proportional fold change from the full result object
-# Need to specify formula_composition and from/to groups
 prop_fold_change_data <- sccomp_proportional_fold_change(
   result,
   formula_composition = ~ body_site,
@@ -1562,7 +1584,7 @@ prop_fold_change_sig <- prop_fold_change_tbl %>%
   dplyr::inner_join(significant_taxa, by = "cell_group") %>%
   dplyr::mutate(abs_fold_change = abs(proportion_fold_change))
 
-cat("\n=== Absolute Proportion Fold Change (significant group IBD only) ===\n")
+cat("\n=== Absolute Proportion Fold Change (significant body_site effects) ===\n")
 cat("N significant taxa:", nrow(prop_fold_change_sig), "\n")
 cat("Mean:", round(mean(prop_fold_change_sig$abs_fold_change, na.rm = TRUE), 4), "\n")
 cat("SD:", round(sd(prop_fold_change_sig$abs_fold_change, na.rm = TRUE), 4), "\n")
@@ -1586,9 +1608,9 @@ cat("SD:", round(sd(v_intercept), 4), "\n")
 cat("Range: [", round(min(v_intercept), 4), ",", 
     round(max(v_intercept), 4), "]\n")
 
-# Convert v_effect (log precision) to log overdispersion: log(σ) ≈ -log(precision)
-log_overdispersion_intercept <- -v_intercept
-log_overdispersion_slope <- -v_slope
+# Convert v_effect using simulator mapping (log(sigma) = v_effect for Brito targets).
+log_overdispersion_intercept <- v_intercept
+log_overdispersion_slope <- v_slope
 
 cat("\n=== Log Overdispersion Intercept (converted from v_effect) ===\n")
 cat("Mean:", round(mean(log_overdispersion_intercept), 4), "\n")
@@ -1624,6 +1646,8 @@ p_v_effect_slope <- ggplot(data.frame(log_overdispersion = log_overdispersion_sl
 ```
 
 ```{r combined-parameter-plot, fig.width=16, fig.height=12}
+#| eval: !expr Sys.info()[["sysname"]] != "Darwin"
+
 # Combined parameter visualization
 # One row: intercept c_ and proportion, slope c_ and proportional fold, then OD intercept and slope
 # Remove y-axis labels, numbers, and ticks from all plots except the leftmost one
@@ -1663,6 +1687,7 @@ p_combined
 
 ```{r combined-parameter-plot-save-pdf}
 #| echo: false
+#| eval: !expr Sys.info()[["sysname"]] != "Darwin"
 ggsave("Figure_1_BritoIL_2016.pdf", p_combined, width = 183, height = 183/4, units = "mm")
 ```
 
@@ -1676,7 +1701,7 @@ n_taxa <- n_taxa_real
 n_samples_per_group <- floor(n_samples_real / 2)  # Split into 2 groups
 n_groups <- 2
 n_samples <- n_samples_per_group * n_groups
-group_levels <- c("non-IBD", "IBD")  # Matches simulation output
+group_levels <- c("stool", "oralcavity")  # Matches simulation output (body_site)
 
 library_size_mean <- 15125  # From HMP2 average total counts per sample
 library_size_sd <- 5000
@@ -2006,7 +2031,7 @@ if (!is.null(model_input_case4_5) && is.list(model_input_case4_5)) {
 
 # Extract baseline abundance distribution (intercept effects for composition)
 intercept_effects_case4_5 <- result_case4_5 %>%
-  filter(parameter == "(Intercept)") %>%
+  filter(parameter == "Intercept") %>%
   pull(c_effect)
 
 # Extract mean-overdispersion association coefficient (k)
@@ -2058,7 +2083,7 @@ source("_targets_BritoIL_2016.R")
 sim_realistic_taxa <- simulate_case_realistic_taxa(
   slope_vector = rep(0, sim_params$n_taxa),  # No DA
   mu_inv_softmax = sim_params$mu_inv_softmax_base_realistic,
-  log_dispersion_assoc = sccomp_params$k_real,
+  log_dispersion_assoc = 0,
   intercept_dispersion_matrix = intercept_disp_matrix,
   sd_log_overdispersion = 0,
   seed = base_seed,
@@ -2149,8 +2174,8 @@ sweep_setting_DO_no_sd_fpr <- targets::tar_read("sweep_setting_DO_no_sd_fpr")
 ```{r fig-2-components}
 # Figure 2 components (Setting DO_no_sd filtered)
 cols_prgn <- c(
-  "non-IBD" = RColorBrewer::brewer.pal(11, "PRGn")[10], # green
-  "IBD" = RColorBrewer::brewer.pal(11, "PRGn")[2]   # purple
+  stool = RColorBrewer::brewer.pal(11, "PRGn")[10],
+  oralcavity = RColorBrewer::brewer.pal(11, "PRGn")[2]
 )
 
 p_std_realistic_taxa_filtered <- cmp_realistic_taxa_filtered$stats %>% dplyr::filter(method == "permdisp_bray") %>% dplyr::pull(p_value)
@@ -2188,7 +2213,7 @@ distances_non_ibd_realistic_taxa_filtered <- cmp_realistic_taxa_filtered$distanc
 p_boxplots_all_realistic_taxa_filtered <- ggplot(distances_non_ibd_realistic_taxa_filtered, aes(x = method_label, y = distance, fill = group)) +
   geom_boxplot(width = 0.5, outlier.size = 0.1, alpha = 0.85, linewidth = 0.25, outlier.stroke = 0, position = position_dodge(width = 0.8)) +
   geom_jitter(size = 1.0, alpha = 0.25, stroke = 0, position = position_jitterdodge(dodge.width = 0.8, jitter.width = 0.12)) +
-  scale_fill_manual(values = cols_prgn, labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"), name = NULL) +
+  scale_fill_manual(values = cols_prgn, name = NULL) +
   facet_wrap(~ method_group, nrow = 1, scales = "free", space = "free_x") +
   labs(x = NULL, y = "Distance to centroid") +
   theme_multipanel +
@@ -2614,13 +2639,15 @@ mu_base_DA_sd <- mu_inv_softmax_base_realistic
 k_fixed_DA_sd <- 0
 
 standard_distance_methods_setting5 <- c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
-group_levels <- c("non-IBD", "IBD")
+group_levels <- c("stool", "oralcavity")
 
 cols_prgn_setting5 <- c(
-  "non-IBD" = RColorBrewer::brewer.pal(11, "PRGn")[10],
-  "IBD" = RColorBrewer::brewer.pal(11, "PRGn")[2]
+  stool = RColorBrewer::brewer.pal(11, "PRGn")[10],
+  oralcavity = RColorBrewer::brewer.pal(11, "PRGn")[2]
 )
 
+# Whole-taxon (column) filter only: mean proportion is computed per taxon across *all* samples,
+# then taxa below the threshold are removed entirely. No per-cell or per-sample-row dropping.
 filter_by_abundance_for_plot <- function(count_long, min_abundance) {
   taxon_means <- count_long %>%
     dplyr::mutate(proportion = count / library_size) %>%
@@ -2973,10 +3000,22 @@ d_whisker_40_da <- sim_40_da_filtered$count_long %>%
     dplyr::group_by(group, taxon_id) %>%
     dplyr::summarise(
       mean_prop = mean(proportion, na.rm = TRUE),
+      med_prop = stats::median(proportion, na.rm = TRUE),
       p_low = stats::quantile(proportion, 0.025, na.rm = TRUE),
       p_high = stats::quantile(proportion, 0.975, na.rm = TRUE),
       .groups = "drop"
     )
+# Whiskers are 2.5%–97.5% empirical quantiles. The point uses the **median**, not the mean:
+# with zero-inflated proportions (many zeros + rare large counts), the **mean can lie above
+# p_high** even though p_high is a valid upper quantile — then a mean dot looks like the
+# "upper quantile is below the dot". The median always lies between p_low and p_high.
+# With discrete counts, p_low == p_high often → zero-height interval (looks like a missing whisker).
+n_w_zero_height <- sum(dplyr::coalesce(d_whisker_40_da$p_high - d_whisker_40_da$p_low, 0) <= 0, na.rm = TRUE)
+cat(
+  "- Whisker segments with zero height (p_low == p_high): ",
+  n_w_zero_height, " of ", nrow(d_whisker_40_da), " group×taxon cells\n",
+  sep = ""
+)
   
 taxon_order_whisker_40_da <- d_whisker_40_da %>%
     dplyr::group_by(taxon_id) %>%
@@ -3033,7 +3072,7 @@ distances_non_ibd_40_da <- cmp_40_da$distances_long %>%
 p_boxplots_40_da <- ggplot(distances_non_ibd_40_da, aes(x = method_label, y = distance, fill = group)) +
   geom_boxplot(width = 0.5, outlier.size = 0.1, alpha = 0.85, linewidth = 0.25, outlier.stroke = 0, position = position_dodge(width = 0.8)) +
   geom_jitter(size = 1.0, alpha = 0.25, stroke = 0, position = position_jitterdodge(dodge.width = 0.8, jitter.width = 0.12)) +
-  scale_fill_manual(values = cols_prgn_setting5, labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"), name = NULL) +
+  scale_fill_manual(values = cols_prgn_setting5, name = NULL) +
   facet_wrap(~ method_group, nrow = 1, scales = "free", space = "free_x") +
   labs(x = NULL, y = "Distance to centroid") +
   theme_multipanel +
@@ -3250,42 +3289,61 @@ invisible(gc())
 ## Parameter Summary Table
 
 ```{r parameter-summary}
+# Targets use v_effect-derived dispersion (see sccomp_params); prec_* may be NA / not used.
+fmt_num <- function(x, d = 4) {
+  if (length(x) != 1L || is.na(x)) return("N/A")
+  as.character(round(x, d))
+}
+fmt_rng <- function(x) {
+  paste0("[", round(min(x), 2), ", ", round(max(x), 2), "]")
+}
+prec_slope_txt <- if (exists("prec_slope") && length(prec_slope) == 1L && !is.na(prec_slope)) {
+  as.character(round(prec_slope, 4))
+} else {
+  "N/A (optional fit summary)"
+}
+prec_int_txt <- if (exists("prec_intercept") && length(prec_intercept) == 1L && !is.na(prec_intercept)) {
+  as.character(round(prec_intercept, 4))
+} else {
+  "N/A (optional fit summary)"
+}
+
 param_summary <- tibble::tibble(
   Parameter = c(
     "Number of samples",
     "Number of taxa (genera)",
-    "prec_coeff[2] (mean-precision slope)",
-    "k (= prec_coeff[2])",
+    "prec_slope (optional; from extract-dispersion-params chunk)",
+    "k used in targets (sccomp_params$k_real)",
     "Mean-OD association (= -k)",
-    "prec_coeff[1] (precision intercept)",
-    "c (= -prec_coeff[1])",
-    "Precision SD (prec_sd)",
+    "prec_intercept (optional fit summary)",
+    "c from fit (= -prec_intercept); sim uses v_effect for taxon c",
+    "Precision SD (prec_sd) from fit, if read",
     "Baseline intercept range",
     "Group effect (slope) range"
   ),
   `sccomp Value` = c(
     as.character(n_samples_real),
     as.character(n_taxa_real),
-    round(prec_slope, 4),
-    round(k_real, 4),
-    round(-k_real, 4),
-    round(prec_intercept, 4),
-    round(c_real, 4),
-    round(prec_sd_real, 4),
-    paste0("[", round(min(intercept_effects), 2), ", ", round(max(intercept_effects), 2), "]"),
-    paste0("[", round(min(slope_effects), 2), ", ", round(max(slope_effects), 2), "]")
+    prec_slope_txt,
+    fmt_num(k_real),
+    fmt_num(-k_real),
+    prec_int_txt,
+    fmt_num(c_real),
+    fmt_num(prec_sd_real),
+    fmt_rng(intercept_effects),
+    fmt_rng(slope_effects)
   ),
   `Simulation Value` = c(
     as.character(n_samples),
     as.character(n_taxa),
     "N/A",
-    round(k_realistic, 4),
-    round(-k_realistic, 4),
+    fmt_num(k_realistic),
+    fmt_num(-k_realistic),
     "N/A",
-    round(intercept_disp_realistic, 4),
-    round(prec_sd_real, 4),
-    paste0("[", round(min(mu_inv_softmax_base_realistic), 2), ", ", round(max(mu_inv_softmax_base_realistic), 2), "]"),
-    paste0("[", round(min(slope_realistic), 2), ", ", round(max(slope_realistic), 2), "]")
+    fmt_num(intercept_disp_realistic),
+    fmt_num(prec_sd_real),
+    fmt_rng(mu_inv_softmax_base_realistic),
+    fmt_rng(slope_realistic)
   )
 )
 
@@ -3298,14 +3356,14 @@ The simulation uses parameters extracted directly from the HMP2 microbiome datas
 
 ### Parameter Mapping (sccomp → Simulator)
 
-**sccomp uses precision**: `log(precision) = prec_coeff[1] + prec_coeff[2] × log(mean)`
+**sccomp uses precision**: `log(precision) ≈ prec_intercept + prec_slope × log(mean)` (indexed `prec_intercept_1`, `prec_slope_1` when bimodal)
 
 **Simulator uses overdispersion (σ)**: `log(σ) = -k × log(mean) + c`
 
 Since `precision ≈ 1/σ`, we have `log(σ) ≈ -log(precision)`, so:
 
-- **k = prec_coeff[2]** = `r round(k_real, 4)` (the slope transfers directly)
-- **c = -prec_coeff[1]** = `r round(c_real, 4)` (the intercept is negated)
+- **k = prec_slope** = `r round(k_real, 4)` (the slope transfers directly)
+- **c = -prec_intercept** = `r round(c_real, 4)` (the intercept is negated)
 
 ### Interpretation
 

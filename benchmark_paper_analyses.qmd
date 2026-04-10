@@ -513,8 +513,13 @@ format_analysis_results_for_plotting <- function(
 plot_alpha_diversity_scatter <- function(sim_result, case_label = "Case") {
   # This is the same style used in the discovery report:
   # `print(alpha_1$plot)` from `run_alpha_diversity_analysis()`.
-  alpha <- run_alpha_diversity_analysis(sim_result, case_label = case_label)
-  # Default color values (will be overridden if scale_color_manual is applied after)
+  # HMP2 IBD benchmark: group labels hardcoded for this QMD only.
+  alpha <- run_alpha_diversity_analysis(
+    sim_result,
+    case_label = case_label,
+    group_levels = c("non-IBD", "IBD"),
+    group_colors = c("non-IBD" = "#E74C3C", "IBD" = "#3498DB")
+  )
   color_vals <- c("non-IBD" = "#E74C3C", "IBD" = "#3498DB")
   # Update plot to use theme_multipanel and remove titles/subtitles
   # Note: stat_ellipse linewidth is set in functions.R
