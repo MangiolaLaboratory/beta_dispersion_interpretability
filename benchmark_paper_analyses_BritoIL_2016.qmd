@@ -3078,9 +3078,6 @@ rm(list = intersect(
     "taxon_abundance_40_da_original", "top30_after_filter_40_da",
     "arcsin_sqrt_trans_40_da", "d_whisker_40_da", "taxon_order_whisker_40_da",
     "prop_breaks_whisker_40_da", "distances_non_ibd_40_da",
-    "count_long_brito_obs", "count_long_brito_obs_f", "taxon_top30_brito",
-    "taxon_order_brito_whisker", "prop_breaks_brito", "d_whisker_brito_obs",
-    "p_whisker_brito_obs", "p_whisker_fig3_left",
     "p_whisker_40_da", "alpha_plot_40_da", "p_boxplots_40_da"
   ),
   ls()
@@ -3088,8 +3085,8 @@ rm(list = intersect(
 invisible(gc())
 ```
 
-```{r figure-3, fig.width=16, fig.height=14}
-#| fig-cap: "Figure 3. Top row: composition-level diagnostics for Setting DA_no_sd at 40 DA taxa (simulated whisker plot on Taxon_1… slots, observed BritoIL_2016 whisker on the top 30 real FeatureIDs—same 0.1% mean filter, not the same x-axis taxa because sims use synthetic labels), alpha-diversity scatter, and distance-to-centroid boxplots. Bottom-left column: (1) PERMDISP false positive rate sweep for Setting DA_no_sd (filtered), (2) PERMANOVA true positive rate sweep on the same Setting DA_no_sd simulations (filtered), and (3) FNR-FPR summary scatter. Bottom-right column: PCoA panels for Setting DA_no_sd (filtered)."
+```{r figure-3, fig.width=16, fig.height=12}
+#| fig-cap: "Figure 3. Top row: composition-level diagnostics for Setting DA_no_sd at 40 DA taxa (whisker plot, alpha-diversity scatter, and distance-to-centroid boxplots). Bottom-left column: (1) PERMDISP false positive rate sweep for Setting DA_no_sd (filtered), (2) PERMANOVA true positive rate sweep on the same Setting DA_no_sd simulations (filtered), and (3) FNR-FPR summary scatter. Bottom-right column: PCoA panels for Setting DA_no_sd (filtered)."
 # Organize Figure 3 in two columns:
 # Top row: whisker plot (40 DA) | alpha diversity (40 DA) | boxplots (40 DA)
 # Bottom: Left column: 3 rows (Setting DA_no_sd filtered FPR sweep, Setting DA_no_sd PERMANOVA TPR sweep, scatter plot)
