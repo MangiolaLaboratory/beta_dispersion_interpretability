@@ -2261,36 +2261,45 @@ extract_precision_trend_params <- function(fit) {
     error = function(e) character()
   )
 
-  # Legacy sccomp output: single 2-parameter vector `prec_coeff`.
-  if ("prec_coeff" %in% fit_vars || length(fit_vars) == 0) {
-    prec_coeff_summary <- fit$summary("prec_coeff")
+  # sccomp: indexed prec_intercept_j / prec_slope_j (e.g. bimodal); use j = 1, else j = 2.
+  pick_indexed_prec <- function(j) {
+    pi <- paste0("prec_intercept_", j)
+    ps <- paste0("prec_slope_", j)
+    if (pi %in% fit_vars && ps %in% fit_vars) {
+      int_s <- fit$summary(pi)
+      slo_s <- fit$summary(ps)
+      list(
+        prec_intercept = int_s$mean[1],
+        prec_slope = slo_s$mean[1],
+        k_sd_real = slo_s$sd[1],
+        slope_parameter = ps
+      )
+    } else {
+      NULL
+    }
+  }
+  out <- pick_indexed_prec(1L)
+  if (!is.null(out)) {
+    return(out)
+  }
+  out <- pick_indexed_prec(2L)
+  if (!is.null(out)) {
+    return(out)
+  }
+
+  # Older sccomp: scalar prec_intercept + prec_slope* (unindexed name).
+    slope_vars <- sort(grep("^prec_slope", fit_vars, value = TRUE))
+
+    slope_parameter <- slope_vars[[1]]
+    prec_intercept <- fit$summary("prec_intercept")$mean[1]
+    slope_summary <- fit$summary(slope_parameter)
     return(list(
-      prec_intercept = prec_coeff_summary$mean[1],
-      prec_slope = prec_coeff_summary$mean[2],
-      k_sd_real = prec_coeff_summary$sd[2],
-      slope_parameter = "prec_coeff[2]"
+      prec_intercept = prec_intercept,
+      prec_slope = slope_summary$mean[1],
+      k_sd_real = slope_summary$sd[1],
+      slope_parameter = slope_parameter
     ))
-  }
 
-  # Newer sccomp output: intercept + one or more slope parameters.
-  if (!("prec_intercept" %in% fit_vars)) {
-    stop("Could not find precision intercept parameter in sccomp fit.")
-  }
-  slope_vars <- sort(grep("^prec_slope", fit_vars, value = TRUE))
-  if (length(slope_vars) == 0) {
-    stop("Could not find precision slope parameter in sccomp fit.")
-  }
-
-  slope_parameter <- slope_vars[1]
-  prec_intercept <- fit$summary("prec_intercept")$mean[1]
-  slope_summary <- fit$summary(slope_parameter)
-
-  list(
-    prec_intercept = prec_intercept,
-    prec_slope = slope_summary$mean[1],
-    k_sd_real = slope_summary$sd[1],
-    slope_parameter = slope_parameter
-  )
 }
 
 extract_sccomp_params <- function(result) {
@@ -2403,8 +2412,14 @@ build_simulation_params <- function(
 
 # Variant of extract_sccomp_params for models whose non-intercept coefficient name
 # is not fixed (e.g. body_site terms); also exposes taxon-level alpha intercepts.
-extract_sccomp_params_brito <- function(result) {
-  fit <- attr(result, "fit")
+#
+# Brito path does not use fit precision-trend parameters for simulation setup.
+# We always return `k_real = 0`, and `c_real` / `prec_sd_real` as NA for this
+# extractor. Dispersion intercepts come from `v_effect` via
+# `alpha_intercept_effects <- v_intercept` in build_simulation_params_brito().
+extract_sccomp_params_brito <- function(
+    result,
+    use_precision_trend_from_fit = FALSE) {
   model_input <- attr(result, "model_input")
 
   if (!is.null(model_input) && is.list(model_input)) {
@@ -2415,22 +2430,18 @@ extract_sccomp_params_brito <- function(result) {
     n_samples_real <- 178
   }
 
-  precision_params <- extract_precision_trend_params(fit)
-  prec_intercept <- precision_params$prec_intercept
-  prec_slope <- precision_params$prec_slope
-  k_real <- prec_slope
-  k_sd_real <- precision_params$k_sd_real
-  c_real <- -prec_intercept
-
-  prec_sd_summary <- fit$summary("prec_sd")
-  prec_sd_real <- prec_sd_summary$mean[1]
+  # `use_precision_trend_from_fit` is kept only for backward compatibility.
+  k_real <- 0
+  k_sd_real <- NA_real_
+  c_real <- NA_real_
+  prec_sd_real <- NA_real_
 
   intercept_effects <- result %>%
-    filter(.data$parameter == "(Intercept)") %>%
+    filter(.data$parameter == "Intercept") %>%
     pull(.data$c_effect)
 
   group_parameter <- result %>%
-    dplyr::filter(.data$parameter != "(Intercept)") %>%
+    dplyr::filter(.data$parameter != "Intercept") %>%
     dplyr::pull(.data$parameter) %>%
     unique()
   if (length(group_parameter) == 0) {
@@ -2450,16 +2461,18 @@ extract_sccomp_params_brito <- function(result) {
     pull(.data$c_effect)
 
   v_intercept <- result %>%
-    filter(.data$parameter == "(Intercept)") %>%
+    filter(.data$parameter == "Intercept") %>%
     pull(.data$v_effect)
 
   v_slope <- result %>%
     filter(.data$parameter == group_parameter) %>%
     pull(.data$v_effect)
 
-  # sccomp variability terms are on precision scale; convert to log(sigma)-like
-  # intercept effects via sign inversion, matching existing conventions.
-  alpha_intercept_effects <- -v_intercept
+  # sccomp variability follows precision parameterization phi = exp(-v_effect).
+  # Simulator uses sigma as dispersion with concentration kappa = 1/sigma.
+  # To preserve semantics (higher precision -> lower dispersion), map to
+  # log(sigma) = v_effect, i.e. sigma = exp(v_effect) = 1 / exp(-v_effect).
+  alpha_intercept_effects <- v_intercept
 
   list(
     n_samples_real = n_samples_real,
@@ -2495,13 +2508,23 @@ build_simulation_params_brito <- function(
   library_size_mean <- 15125
   library_size_sd <- 5000
 
-  sampled_intercepts <- sample(sccomp_params$intercept_effects, n_taxa, replace = TRUE)
+  # Preserve taxon-level dependence between composition and variability intercepts
+  # by resampling paired (c_intercept, alpha_intercept) rows together.
+  n_intercept_rows <- length(sccomp_params$intercept_effects)
+  if (n_intercept_rows != length(sccomp_params$alpha_intercept_effects)) {
+    stop(
+      "intercept_effects and alpha_intercept_effects must have the same length ",
+      "for paired resampling."
+    )
+  }
+  paired_idx <- sample.int(n_intercept_rows, size = n_taxa, replace = TRUE)
+  sampled_intercepts <- sccomp_params$intercept_effects[paired_idx]
+  sampled_alpha <- sccomp_params$alpha_intercept_effects[paired_idx]
+
   mu_inv_softmax_base_realistic <- sampled_intercepts - mean(sampled_intercepts)
 
-  # Use empirical alpha-intercept distribution from fitted variability intercepts.
-  # We keep simulator compatibility (scalar c + taxon-level random spread) by
-  # mapping sampled alpha effects to mean/SD controls.
-  sampled_alpha <- sample(sccomp_params$alpha_intercept_effects, n_taxa, replace = TRUE)
+  # Use empirical alpha-intercept values (paired with sampled composition
+  # intercepts) to set taxon-level log(sigma) intercepts.
   intercept_disp_realistic <- mean(sampled_alpha)
   intercept_disp_realistic_taxon <- sampled_alpha
   sd_log_overdispersion_realistic <- stats::sd(sampled_alpha)
