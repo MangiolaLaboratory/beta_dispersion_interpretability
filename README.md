@@ -4,7 +4,7 @@ This repository contains the code and analyses for the paper *"Beta dispersion l
 
 ## License
 
-This project is released under the **GNU General Public License v3.0 (GPL-3.0)**, an [OSI-approved](https://opensource.org/licenses/) open-source license. The GPL is a strong copyleft license: you may use, modify, and distribute the code, provided derivatives are released under the same license. See [LICENSE](LICENSE) for the full text.
+This project is released under the **GNU General Public License v2.0 (GPL-2.0)**, an [OSI-approved](https://opensource.org/licenses/) open-source license. The GPL is a strong copyleft license: you may use, modify, and distribute the code, provided derivatives are released under the same license. See [LICENSE](LICENSE) for the full text.
 
 ## Requirements
 
@@ -24,7 +24,7 @@ Below is a brief summary of the files present in this repository.
 | `Supplementary_figure_report.qmd` | Supplementary figures and diagnostics from targets outputs |
 | `figure_1.png` | Main paper Figure 1 |
 | `figure_2.png` | Main paper Figure 2 |
-| `LICENSE` | GNU General Public License v3.0 |
+| `LICENSE` | GNU General Public License v2.0 |
 
 ---
 
