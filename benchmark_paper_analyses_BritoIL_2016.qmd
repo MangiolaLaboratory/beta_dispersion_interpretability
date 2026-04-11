@@ -731,7 +731,21 @@ if (!file.exists(sccomp_file_path)) {
     # TEST
     exclude_priors = TRUE
   ) |>
-    sccomp_test(contrasts = c("Intercept" =  "`(Intercept)`", "body_siteoralcavity")) 
+    sccomp_test(contrasts = c("Intercept" = "`(Intercept)`", "body_siteoralcavity"))
+  
+  fit = fit |> 
+    sccomp:::incorporate_parameters_into_sccomp_object(
+    parameters_to_load = c( 
+      "prec_intercept_1",
+      "prec_slope_1",
+      "prec_intercept_2",
+      "prec_slope_2",
+      "prec_sd",
+      "mix_p",
+      "beta",
+      "alpha"
+    ))
+  
   saveRDS(fit, sccomp_file_path)
   message("Saved sccomp fit to: ", sccomp_file_path)
 } else {
@@ -1225,7 +1239,7 @@ list(
 }, script = "_targets_BritoIL_2016.R", ask=FALSE)
 
 # Run the targets pipeline
-targets::tar_make(script = "_targets_BritoIL_2016.R")
+targets::tar_make(script = "_targets_BritoIL_2016.R", store = "_targets_BritoIL_2016")
 ```
 
 ```{r targets-load}
