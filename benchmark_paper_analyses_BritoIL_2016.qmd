@@ -1255,9 +1255,9 @@ targets::tar_config_set(script = targets_script)
 source(targets_script)
 
 # Load basic parameters that are used in many places
-sccomp_params <- targets::tar_read("sccomp_params")
-sim_params <- targets::tar_read("sim_params")
-abundance_thresholds <- targets::tar_read("abundance_thresholds")
+sccomp_params <- targets::tar_read("sccomp_params", store = "_targets_BritoIL_2016")
+sim_params <- targets::tar_read("sim_params", store = "_targets_BritoIL_2016")
+abundance_thresholds <- targets::tar_read("abundance_thresholds", store = "_targets_BritoIL_2016")
 # Default threshold for regular plots (use 0.005)
 abundance_threshold <- 0.005
 
@@ -2047,7 +2047,7 @@ gc()
 # Figure 2 is about DO (differential overdispersion), not DA
 # Row 1 uses delta DO = 0.5 from Setting DO_no_sd
 # Load required targets
-sweep_setting_DO_no_sd_jobs <- targets::tar_read("sweep_setting_DO_no_sd_jobs")
+sweep_setting_DO_no_sd_jobs <- targets::tar_read("sweep_setting_DO_no_sd_jobs", store = "_targets_BritoIL_2016")
 
 # Allow running this chunk standalone in IDE sessions where setup may be skipped.
 if (!exists("simulate_case_realistic_taxa")) {
@@ -2167,7 +2167,7 @@ cmp_realistic_taxa_filtered <- format_analysis_results_for_plotting(
 
 ```{r figure-2-DO-sweep-data}
 # Load Setting DO_no_sd FPR data for FNR/centroid plots
-sweep_setting_DO_no_sd_fpr <- targets::tar_read("sweep_setting_DO_no_sd_fpr")
+sweep_setting_DO_no_sd_fpr <- targets::tar_read("sweep_setting_DO_no_sd_fpr", store = "_targets_BritoIL_2016")
 ```
 
 
@@ -2673,9 +2673,9 @@ seed_idx_fig3 <- 1
 ```{r setting-DA-no-sd-filtered-pcoa-plots}
 # Create PCoA panel for Setting DA_no_sd (filtered) using sweep analysis outputs
 # Use threshold = 0.001 (0.1%) for filtered plots
-sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs")
-sweep_setting_DA_no_sd_jobs_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_jobs_with_threshold")
-sweep_setting_DA_no_sd_res <- targets::tar_read("sweep_setting_DA_no_sd_res")
+sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs", store = "_targets_BritoIL_2016")
+sweep_setting_DA_no_sd_jobs_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_jobs_with_threshold", store = "_targets_BritoIL_2016")
+sweep_setting_DA_no_sd_res <- targets::tar_read("sweep_setting_DA_no_sd_res", store = "_targets_BritoIL_2016")
 # Use the same seed for all cases (1, 10, 40 DA) for consistency
 available_seeds <- unique(sweep_setting_DA_no_sd_jobs$seed)
 seed_fig3_pcoa <- available_seeds[min(seed_idx_fig3, length(available_seeds))]
@@ -2718,7 +2718,7 @@ invisible(gc())
 
 ```{r setting-DA-no-sd-filtered-top-panel}
 # Get FPR data for all thresholds (0.005 opaque, 0.001 lighter, 0.0 lightest)
-fpr_setting_DA_no_sd_filtered <- targets::tar_read("sweep_setting_DA_no_sd_fpr")
+fpr_setting_DA_no_sd_filtered <- targets::tar_read("sweep_setting_DA_no_sd_fpr", store = "_targets_BritoIL_2016")
 
 p_setting_DA_no_sd_filtered_fpr <- plot_da_taxa_sweep_results(
   fpr_data = fpr_setting_DA_no_sd_filtered,
@@ -2740,7 +2740,7 @@ p_setting_DA_no_sd_filtered_fpr <- plot_da_taxa_sweep_results(
 This panel uses the same filtered simulations as the first Figure 3 sweep (**Setting DA_no_sd**, `k = 0`, `sd_log_overdispersion = 0`) and evaluates **PERMANOVA true positive rate** (detection rate) when true differential abundance is present (`n_da_taxa > 0`).
 
 ```{r setting-DA-no-sd-permanova-tpr, fig.width=12, fig.height=8}
-permanova_da_tpr <- targets::tar_read("sweep_setting_DA_no_sd_permanova_tpr") %>%
+permanova_da_tpr <- targets::tar_read("sweep_setting_DA_no_sd_permanova_tpr", store = "_targets_BritoIL_2016") %>%
   dplyr::mutate(
     method_label = dplyr::case_when(
       .data$method == "permanova_bray" ~ "Bray–Curtis",
@@ -2928,14 +2928,14 @@ print(fpr_fig3 %>% dplyr::arrange(method))
 # Create plots for 40 DA case (Setting DA_no_sd) for top row of Figure 3
 # Use 40 DA simulation + analysis from sweep outputs (then filter for plotting)
 if (!exists("sweep_setting_DA_no_sd_jobs", inherits = FALSE)) {
-  sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs")
+  sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs", store = "_targets_BritoIL_2016")
 }
-sweep_setting_DA_no_sd_sim <- targets::tar_read("sweep_setting_DA_no_sd_sim")
+sweep_setting_DA_no_sd_sim <- targets::tar_read("sweep_setting_DA_no_sd_sim", store = "_targets_BritoIL_2016")
 if (!exists("sweep_setting_DA_no_sd_jobs_with_threshold", inherits = FALSE)) {
-  sweep_setting_DA_no_sd_jobs_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_jobs_with_threshold")
+  sweep_setting_DA_no_sd_jobs_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_jobs_with_threshold", store = "_targets_BritoIL_2016")
 }
 if (!exists("sweep_setting_DA_no_sd_res", inherits = FALSE)) {
-  sweep_setting_DA_no_sd_res <- targets::tar_read("sweep_setting_DA_no_sd_res")
+  sweep_setting_DA_no_sd_res <- targets::tar_read("sweep_setting_DA_no_sd_res", store = "_targets_BritoIL_2016")
 }
 # Use the same seed as PCoA plots for consistency (uses seed_idx_fig3 from figure-3-seed-selection chunk)
 available_seeds_fig3 <- unique(sweep_setting_DA_no_sd_jobs$seed)
@@ -3164,10 +3164,10 @@ invisible(gc())
 This setting sweeps over the number of DA taxa (0, 1, 2, 3, ...) using slopes sampled from **significant DA taxa only** (credible interval excludes 0). Uses **k = 0 (no mean-OD association)** to ensure proper FPR testing at n_da_taxa = 0; with `sd_log_overdispersion = 0`, taxa also share the same baseline OD within and across groups at the null. This tests how method performance changes as we progressively add more DA taxa, starting from no DA (FPR test) to increasing numbers of DA taxa (power test).
 
 ```{r supp-fig-3, fig.width=16, fig.height=16}
-sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs")
-sweep_setting_DA_sd_jobs <- targets::tar_read("sweep_setting_DA_sd_jobs")
-sweep_setting_DA_no_sd_res <- targets::tar_read("sweep_setting_DA_no_sd_res")
-sweep_setting_DA_sd_res <- targets::tar_read("sweep_setting_DA_sd_res")
+sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs", store = "_targets_BritoIL_2016")
+sweep_setting_DA_sd_jobs <- targets::tar_read("sweep_setting_DA_sd_jobs", store = "_targets_BritoIL_2016")
+sweep_setting_DA_no_sd_res <- targets::tar_read("sweep_setting_DA_no_sd_res", store = "_targets_BritoIL_2016")
+sweep_setting_DA_sd_res <- targets::tar_read("sweep_setting_DA_sd_res", store = "_targets_BritoIL_2016")
 # Use available seeds (with n_reps_auc=2, we have seeds 12001 and 12002)
 available_seeds_supp <- unique(sweep_setting_DA_no_sd_jobs$seed)
 seed_1_da_supp <- available_seeds_supp[1]
@@ -3216,9 +3216,9 @@ invisible(gc())
 if (exists("fpr_setting_DA_no_sd_filtered", inherits = FALSE)) {
   fpr_setting_DA_no_sd <- fpr_setting_DA_no_sd_filtered
 } else {
-  fpr_setting_DA_no_sd <- targets::tar_read("sweep_setting_DA_no_sd_fpr")
+  fpr_setting_DA_no_sd <- targets::tar_read("sweep_setting_DA_no_sd_fpr", store = "_targets_BritoIL_2016")
 }
-fpr_setting_DA_sd <- targets::tar_read("sweep_setting_DA_sd_fpr")
+fpr_setting_DA_sd <- targets::tar_read("sweep_setting_DA_sd_fpr", store = "_targets_BritoIL_2016")
 
 p_setting_DA_no_sd <- plot_da_taxa_sweep_results(
   fpr_data = fpr_setting_DA_no_sd,
