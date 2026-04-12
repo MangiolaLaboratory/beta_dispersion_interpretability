@@ -791,7 +791,8 @@ new_elastic <- function(name, mem_gb, time_min, workers, crashes_max, backup = N
 }
 
 # Small → large, with fallbacks to the next size up
-elastic_160 <- new_elastic("elastic_160", 160, 60 * 24, workers = 8,  crashes_max = 2)
+elastic_320 <- new_elastic("elastic_160", 320, 60 * 24, workers = 4,  crashes_max = 2)
+elastic_160 <- new_elastic("elastic_160", 160, 60 * 24, workers = 8,  crashes_max = 2, backup = elastic_320)
 elastic_80  <- new_elastic("elastic_80",   80,  60 * 4,  workers = 16, crashes_max = 1, backup = elastic_160)
 elastic_40  <- new_elastic("elastic_40",   40,  60 * 4,  workers = 24, crashes_max = 1, backup = elastic_80)
 elastic_20  <- new_elastic("elastic_20",   20,  60 * 4,  workers = 32, crashes_max = 1, backup = elastic_40)
