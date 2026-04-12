@@ -791,16 +791,17 @@ new_elastic <- function(name, mem_gb, time_min, workers, crashes_max, backup = N
 }
 
 # Small → large, with fallbacks to the next size up
-elastic_160 <- new_elastic("elastic_160", 160, 60 * 24, workers = 8,  crashes_max = 2)
+elastic_320 <- new_elastic("elastic_320", 320, 60 * 24, workers = 2, crashes_max = 2)
+elastic_160 <- new_elastic("elastic_160", 160, 60 * 24, workers = 8,  crashes_max = 2, backup = elastic_320)
 elastic_80  <- new_elastic("elastic_80",   80,  60 * 4,  workers = 16, crashes_max = 1, backup = elastic_160)
 elastic_40  <- new_elastic("elastic_40",   40,  60 * 4,  workers = 24, crashes_max = 1, backup = elastic_80)
 elastic_20  <- new_elastic("elastic_20",   20,  60 * 4,  workers = 32, crashes_max = 1, backup = elastic_40)
 elastic_10  <- new_elastic("elastic_10",   10,  60 * 4,  workers = 48, crashes_max = 1, backup = elastic_20)
 elastic_5   <- new_elastic("elastic_5",     5, 60 * 4,  workers = 200, crashes_max = 6, backup = elastic_10)
 
-# Group for targets (small → large)
+# Group for targets (small → large); `elastic_320` is reserved for targets that request it via `tar_resources_crew(controller = "elastic_320")`.
 slurm_controller <- crew_controller_group(
-  elastic_5, elastic_10, elastic_20, elastic_40, elastic_80, elastic_160
+  elastic_5, elastic_10, elastic_20, elastic_40, elastic_80, elastic_160, elastic_320
 )
 
 # Select controller based on OS
@@ -980,7 +981,10 @@ list(
   ),
   tar_target(
     sweep_setting_DA_no_sd_fpr,
-    summarise_fpr(sweep_setting_DA_no_sd_res)
+    summarise_fpr(sweep_setting_DA_no_sd_res),
+    resources = tar_resources(
+      crew = tar_resources_crew(controller = "elastic_320")
+    )
   ),
   tar_target(
     sweep_setting_DA_no_sd_permanova_res,
@@ -1087,7 +1091,10 @@ list(
   ),
   tar_target(
     sweep_setting_DA_sd_fpr,
-    summarise_fpr(sweep_setting_DA_sd_res)
+    summarise_fpr(sweep_setting_DA_sd_res),
+    resources = tar_resources(
+      crew = tar_resources_crew(controller = "elastic_320")
+    )
   ),
 
   # Setting DO_no_sd: Define jobs (differential overdispersion, no sd, no DA)
