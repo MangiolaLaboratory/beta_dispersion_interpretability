@@ -3374,6 +3374,25 @@ run_analysis_job <- function(
   }
 }
 
+#' Drop betadisper distances and fitted objects; keep only fields used by
+#' \code{summarise_fpr()}. Intended for a \code{pattern = map()} branch so each
+#' worker stores a small RDS instead of the full \code{run_analysis_job(..., return_full = TRUE)} output.
+lighten_sweep_analysis_result_for_fpr <- function(x) {
+  if (!is.list(x) || !("method_results" %in% names(x))) {
+    return(x)
+  }
+  method_results_light <- purrr::imap(x$method_results, ~ list(p_value = .x$p_value))
+  out <- list(
+    method_results = method_results_light,
+    seed = x$seed,
+    n_da_taxa = x$n_da_taxa
+  )
+  if ("threshold" %in% names(x)) {
+    out$threshold <- x$threshold
+  }
+  out
+}
+
 summarise_fpr <- function(sweep_results) {
   # Handle case where targets auto-bound tibbles into a single tibble
   if (is.data.frame(sweep_results) && all(c("seed", "n_da_taxa", "method", "p_value") %in% names(sweep_results))) {
