@@ -980,8 +980,14 @@ list(
     iteration = "list"
   ),
   tar_target(
+    sweep_setting_DA_no_sd_res_light,
+    lighten_sweep_analysis_result_for_fpr(sweep_setting_DA_no_sd_res),
+    pattern = map(sweep_setting_DA_no_sd_res),
+    iteration = "list"
+  ),
+  tar_target(
     sweep_setting_DA_no_sd_fpr,
-    summarise_fpr(sweep_setting_DA_no_sd_res),
+    summarise_fpr(sweep_setting_DA_no_sd_res_light),
     resources = tar_resources(
       crew = tar_resources_crew(controller = "elastic_320")
     )
@@ -1090,8 +1096,14 @@ list(
     iteration = "list"
   ),
   tar_target(
+    sweep_setting_DA_sd_res_light,
+    lighten_sweep_analysis_result_for_fpr(sweep_setting_DA_sd_res),
+    pattern = map(sweep_setting_DA_sd_res),
+    iteration = "list"
+  ),
+  tar_target(
     sweep_setting_DA_sd_fpr,
-    summarise_fpr(sweep_setting_DA_sd_res),
+    summarise_fpr(sweep_setting_DA_sd_res_light),
     resources = tar_resources(
       crew = tar_resources_crew(controller = "elastic_320")
     )

@@ -1001,8 +1001,14 @@ list(
     iteration = "list"
   ),
   tar_target(
+    sweep_setting_DA_no_sd_res_light,
+    lighten_sweep_analysis_result_for_fpr(sweep_setting_DA_no_sd_res),
+    pattern = map(sweep_setting_DA_no_sd_res),
+    iteration = "list"
+  ),
+  tar_target(
     sweep_setting_DA_no_sd_fpr,
-    summarise_fpr(sweep_setting_DA_no_sd_res)
+    summarise_fpr(sweep_setting_DA_no_sd_res_light)
   ),
   tar_target(
     sweep_setting_DA_no_sd_permanova_res,
@@ -1108,8 +1114,14 @@ list(
     iteration = "list"
   ),
   tar_target(
+    sweep_setting_DA_sd_res_light,
+    lighten_sweep_analysis_result_for_fpr(sweep_setting_DA_sd_res),
+    pattern = map(sweep_setting_DA_sd_res),
+    iteration = "list"
+  ),
+  tar_target(
     sweep_setting_DA_sd_fpr,
-    summarise_fpr(sweep_setting_DA_sd_res)
+    summarise_fpr(sweep_setting_DA_sd_res_light)
   ),
 
   # Setting DO_no_sd: Define jobs (differential overdispersion, no sd, no DA)

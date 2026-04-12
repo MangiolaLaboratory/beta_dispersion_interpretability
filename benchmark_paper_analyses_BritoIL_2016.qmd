@@ -990,8 +990,14 @@ list(
     iteration = "list"
   ),
   tar_target(
+    sweep_setting_DA_no_sd_res_light,
+    lighten_sweep_analysis_result_for_fpr(sweep_setting_DA_no_sd_res),
+    pattern = map(sweep_setting_DA_no_sd_res),
+    iteration = "list"
+  ),
+  tar_target(
     sweep_setting_DA_no_sd_fpr,
-    summarise_fpr(sweep_setting_DA_no_sd_res)
+    summarise_fpr(sweep_setting_DA_no_sd_res_light)
   ),
   tar_target(
     sweep_setting_DA_no_sd_permanova_res,
@@ -1097,8 +1103,14 @@ list(
     iteration = "list"
   ),
   tar_target(
+    sweep_setting_DA_sd_res_light,
+    lighten_sweep_analysis_result_for_fpr(sweep_setting_DA_sd_res),
+    pattern = map(sweep_setting_DA_sd_res),
+    iteration = "list"
+  ),
+  tar_target(
     sweep_setting_DA_sd_fpr,
-    summarise_fpr(sweep_setting_DA_sd_res)
+    summarise_fpr(sweep_setting_DA_sd_res_light)
   ),
 
   # Setting DO_no_sd: Define jobs (differential overdispersion, no sd, no DA)
@@ -1703,8 +1715,8 @@ n_groups <- 2
 n_samples <- n_samples_per_group * n_groups
 group_levels <- c("stool", "oralcavity")  # Matches simulation output (body_site)
 
-library_size_mean <- 15125  # From HMP2 average total counts per sample
-library_size_sd <- 5000
+library_size_mean <- sim_params$library_size_mean
+library_size_sd <- sim_params$library_size_sd
 
 cat("=== Simulation Parameters ===\n")
 cat("n_taxa:", n_taxa, "(from fitted model)\n")
