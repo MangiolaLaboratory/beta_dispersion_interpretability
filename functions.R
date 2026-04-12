@@ -2302,6 +2302,40 @@ extract_precision_trend_params <- function(fit) {
 
 }
 
+#' Per-sample library sizes from sccomp Stan input (`model_input$exposure`).
+#'
+#' Returns NA values when exposure is missing; callers fall back to defaults.
+library_size_from_sccomp_model_input <- function(model_input) {
+  if (is.null(model_input) || is.null(model_input$exposure)) {
+    return(list(library_size_mean = NA_real_, library_size_sd = NA_real_))
+  }
+  ex <- as.numeric(model_input$exposure)
+  ex <- ex[is.finite(ex) & ex > 0]
+  if (length(ex) == 0L) {
+    return(list(library_size_mean = NA_real_, library_size_sd = NA_real_))
+  }
+  m <- mean(ex)
+  s <- stats::sd(ex)
+  if (!is.finite(s) || s <= 0) {
+    s <- max(0.05 * m, 1)
+  } else {
+    s <- max(s, 0.05 * m)
+  }
+  list(library_size_mean = m, library_size_sd = s)
+}
+
+.sim_library_size_or_default <- function(sccomp_params) {
+  m <- sccomp_params$library_size_mean
+  s <- sccomp_params$library_size_sd
+  if (is.null(m) || !is.finite(m) || m <= 0) {
+    return(list(library_size_mean = 15125, library_size_sd = 5000))
+  }
+  if (is.null(s) || !is.finite(s) || s <= 0) {
+    s <- max(0.05 * m, 1)
+  }
+  list(library_size_mean = m, library_size_sd = s)
+}
+
 extract_sccomp_params <- function(result) {
   fit <- attr(result, "fit")
   model_input <- attr(result, "model_input")
@@ -2313,6 +2347,8 @@ extract_sccomp_params <- function(result) {
     n_taxa_real <- length(unique(result$cell_group))
     n_samples_real <- 178
   }
+
+  lib_ls <- library_size_from_sccomp_model_input(model_input)
 
   precision_params <- extract_precision_trend_params(fit)
   prec_intercept <- precision_params$prec_intercept
@@ -2358,7 +2394,9 @@ extract_sccomp_params <- function(result) {
     slope_effects = slope_effects,
     slope_effects_significant = slope_effects_significant,
     v_intercept = v_intercept,
-    v_slope = v_slope
+    v_slope = v_slope,
+    library_size_mean = lib_ls$library_size_mean,
+    library_size_sd = lib_ls$library_size_sd
   )
 }
 
@@ -2376,8 +2414,9 @@ build_simulation_params <- function(
   n_groups <- 2
   n_samples <- n_samples_per_group * n_groups
 
-  library_size_mean <- 15125
-  library_size_sd <- 5000
+  lib_def <- .sim_library_size_or_default(sccomp_params)
+  library_size_mean <- lib_def$library_size_mean
+  library_size_sd <- lib_def$library_size_sd
 
   sampled_intercepts <- sample(sccomp_params$intercept_effects, n_taxa, replace = TRUE)
   mu_inv_softmax_base_realistic <- sampled_intercepts - mean(sampled_intercepts)
@@ -2468,6 +2507,8 @@ extract_sccomp_params_brito <- function(
     filter(.data$parameter == group_parameter) %>%
     pull(.data$v_effect)
 
+  lib_ls <- library_size_from_sccomp_model_input(model_input)
+
   # sccomp variability follows precision parameterization phi = exp(-v_effect).
   # Simulator uses sigma as dispersion with concentration kappa = 1/sigma.
   # To preserve semantics (higher precision -> lower dispersion), map to
@@ -2487,7 +2528,9 @@ extract_sccomp_params_brito <- function(
     v_intercept = v_intercept,
     v_slope = v_slope,
     alpha_intercept_effects = alpha_intercept_effects,
-    group_parameter = group_parameter
+    group_parameter = group_parameter,
+    library_size_mean = lib_ls$library_size_mean,
+    library_size_sd = lib_ls$library_size_sd
   )
 }
 
@@ -2505,8 +2548,9 @@ build_simulation_params_brito <- function(
   n_groups <- 2
   n_samples <- n_samples_per_group * n_groups
 
-  library_size_mean <- 15125
-  library_size_sd <- 5000
+  lib_def <- .sim_library_size_or_default(sccomp_params)
+  library_size_mean <- lib_def$library_size_mean
+  library_size_sd <- lib_def$library_size_sd
 
   # Preserve taxon-level dependence between composition and variability intercepts
   # by resampling paired (c_intercept, alpha_intercept) rows together.
