@@ -854,6 +854,19 @@ load_sccomp_result <- function(path) {
   readRDS(path)
 }
 
+run_sweep_analysis_with_threshold <- function(sim_r, threshold, seed, n_da_taxa) {
+  sim_filtered <- sim_r
+  sim_filtered$count_long <- filter_by_abundance_cases(
+    sim_r$count_long,
+    threshold = threshold
+  )
+  result <- run_analysis_job(sim_r = sim_filtered, return_full = TRUE)
+  result$threshold <- threshold
+  result$seed <- seed
+  result$n_da_taxa <- n_da_taxa
+  result
+}
+
 list(
   tar_target(
     sccomp_result_file,
@@ -959,36 +972,63 @@ list(
     iteration = "list"
   ),
   tar_target(
-    sweep_setting_DA_no_sd_res,
-    {
-      threshold <- sweep_setting_DA_no_sd_jobs_with_threshold$threshold
-      
-      # Apply filtering (threshold = 0.0 keeps all taxa, effectively unfiltered)
-      sim_filtered <- sweep_setting_DA_no_sd_sim_with_threshold
-      sim_filtered$count_long <- filter_by_abundance_cases(
-        sweep_setting_DA_no_sd_sim_with_threshold$count_long,
-        threshold = threshold
-      )
-      result <- run_analysis_job(sim_r = sim_filtered, return_full = TRUE)
-      
-      # Add threshold to the result for later filtering/plotting
-      result$threshold <- threshold
-      result$seed <- sweep_setting_DA_no_sd_sim_with_threshold$seed
-      result$n_da_taxa <- sweep_setting_DA_no_sd_jobs_with_threshold$n_da_taxa
-      result
-    },
-    pattern = map(sweep_setting_DA_no_sd_jobs_with_threshold, sweep_setting_DA_no_sd_sim_with_threshold),
+    sweep_setting_DA_no_sd_res_unfiltered,
+    run_sweep_analysis_with_threshold(
+      sim_r = sweep_setting_DA_no_sd_sim,
+      threshold = 0.0,
+      seed = sweep_setting_DA_no_sd_sim$seed,
+      n_da_taxa = sweep_setting_DA_no_sd_jobs$n_da_taxa
+    ),
+    pattern = map(sweep_setting_DA_no_sd_jobs, sweep_setting_DA_no_sd_sim),
     iteration = "list"
   ),
   tar_target(
-    sweep_setting_DA_no_sd_res_light,
-    lighten_sweep_analysis_result_for_fpr(sweep_setting_DA_no_sd_res),
-    pattern = map(sweep_setting_DA_no_sd_res),
+    sweep_setting_DA_no_sd_res_threshold_0_005,
+    run_sweep_analysis_with_threshold(
+      sim_r = sweep_setting_DA_no_sd_sim,
+      threshold = 0.005,
+      seed = sweep_setting_DA_no_sd_sim$seed,
+      n_da_taxa = sweep_setting_DA_no_sd_jobs$n_da_taxa
+    ),
+    pattern = map(sweep_setting_DA_no_sd_jobs, sweep_setting_DA_no_sd_sim),
+    iteration = "list"
+  ),
+  tar_target(
+    sweep_setting_DA_no_sd_res_threshold_0_001,
+    run_sweep_analysis_with_threshold(
+      sim_r = sweep_setting_DA_no_sd_sim,
+      threshold = 0.001,
+      seed = sweep_setting_DA_no_sd_sim$seed,
+      n_da_taxa = sweep_setting_DA_no_sd_jobs$n_da_taxa
+    ),
+    pattern = map(sweep_setting_DA_no_sd_jobs, sweep_setting_DA_no_sd_sim),
+    iteration = "list"
+  ),
+  tar_target(
+    sweep_setting_DA_no_sd_res_unfiltered_light,
+    lighten_sweep_analysis_result_for_fpr(sweep_setting_DA_no_sd_res_unfiltered),
+    pattern = map(sweep_setting_DA_no_sd_res_unfiltered),
+    iteration = "list"
+  ),
+  tar_target(
+    sweep_setting_DA_no_sd_res_threshold_0_005_light,
+    lighten_sweep_analysis_result_for_fpr(sweep_setting_DA_no_sd_res_threshold_0_005),
+    pattern = map(sweep_setting_DA_no_sd_res_threshold_0_005),
+    iteration = "list"
+  ),
+  tar_target(
+    sweep_setting_DA_no_sd_res_threshold_0_001_light,
+    lighten_sweep_analysis_result_for_fpr(sweep_setting_DA_no_sd_res_threshold_0_001),
+    pattern = map(sweep_setting_DA_no_sd_res_threshold_0_001),
     iteration = "list"
   ),
   tar_target(
     sweep_setting_DA_no_sd_fpr,
-    summarise_fpr(sweep_setting_DA_no_sd_res_light),
+    dplyr::bind_rows(
+      summarise_fpr(sweep_setting_DA_no_sd_res_unfiltered_light),
+      summarise_fpr(sweep_setting_DA_no_sd_res_threshold_0_005_light),
+      summarise_fpr(sweep_setting_DA_no_sd_res_threshold_0_001_light)
+    ),
     resources = tar_resources(
       crew = tar_resources_crew(controller = "elastic_320")
     )
@@ -1077,22 +1117,12 @@ list(
   ),
   tar_target(
     sweep_setting_DA_sd_res,
-    {
-      threshold <- sweep_setting_DA_sd_jobs_with_threshold$threshold
-
-      # Apply filtering (threshold = 0.0 keeps all taxa, effectively unfiltered)
-      sim_filtered <- sweep_setting_DA_sd_sim_with_threshold
-      sim_filtered$count_long <- filter_by_abundance_cases(
-        sweep_setting_DA_sd_sim_with_threshold$count_long,
-        threshold = threshold
-      )
-      result <- run_analysis_job(sim_r = sim_filtered, return_full = TRUE)
-      
-      result$threshold <- threshold
-      result$seed <- sweep_setting_DA_sd_sim_with_threshold$seed
-      result$n_da_taxa <- sweep_setting_DA_sd_jobs_with_threshold$n_da_taxa
-      result
-    },
+    run_sweep_analysis_with_threshold(
+      sim_r = sweep_setting_DA_sd_sim_with_threshold,
+      threshold = sweep_setting_DA_sd_jobs_with_threshold$threshold,
+      seed = sweep_setting_DA_sd_sim_with_threshold$seed,
+      n_da_taxa = sweep_setting_DA_sd_jobs_with_threshold$n_da_taxa
+    ),
     pattern = map(sweep_setting_DA_sd_jobs_with_threshold, sweep_setting_DA_sd_sim_with_threshold),
     iteration = "list"
   ),
@@ -2667,17 +2697,16 @@ seed_idx_fig3 <- 1
 # Create PCoA panel for Setting DA_no_sd (filtered) using sweep analysis outputs
 # Use threshold = 0.001 (0.1%) for filtered plots
 sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs", store = "_targets_HMP_2019")
-sweep_setting_DA_no_sd_jobs_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_jobs_with_threshold", store = "_targets_HMP_2019")
-sweep_setting_DA_no_sd_res <- targets::tar_read("sweep_setting_DA_no_sd_res", store = "_targets_HMP_2019")
+sweep_setting_DA_no_sd_res_threshold_0_001 <- targets::tar_read("sweep_setting_DA_no_sd_res_threshold_0_001", store = "_targets_HMP_2019")
 # Use the same seed for all cases (1, 10, 40 DA) for consistency
 available_seeds <- unique(sweep_setting_DA_no_sd_jobs$seed)
 seed_fig3_pcoa <- available_seeds[min(seed_idx_fig3, length(available_seeds))]
 threshold_filtered <- 0.001  # Use 0.1% threshold for filtered plots
 
-# Get analysis results for filtered (0.5% threshold) - all using the same seed
-analysis_1_raw <- get_sweep_analysis_with_threshold(sweep_setting_DA_no_sd_res, sweep_setting_DA_no_sd_jobs_with_threshold, seed_fig3_pcoa, 1, threshold_filtered)
-analysis_10_raw <- get_sweep_analysis_with_threshold(sweep_setting_DA_no_sd_res, sweep_setting_DA_no_sd_jobs_with_threshold, seed_fig3_pcoa, 10, threshold_filtered)
-analysis_40_raw <- get_sweep_analysis_with_threshold(sweep_setting_DA_no_sd_res, sweep_setting_DA_no_sd_jobs_with_threshold, seed_fig3_pcoa, 40, threshold_filtered)
+# Get filtered (0.1% threshold) analysis results using the same seed
+analysis_1_raw <- sweep_setting_DA_no_sd_res_threshold_0_001[[get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_fig3_pcoa, 1)]]
+analysis_10_raw <- sweep_setting_DA_no_sd_res_threshold_0_001[[get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_fig3_pcoa, 10)]]
+analysis_40_raw <- sweep_setting_DA_no_sd_res_threshold_0_001[[get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_fig3_pcoa, 40)]]
 if (is.null(analysis_1_raw)) stop("analysis_1_raw is NULL")
 if (is.null(analysis_10_raw)) stop("analysis_10_raw is NULL")
 if (is.null(analysis_40_raw)) stop("analysis_40_raw is NULL")
@@ -2924,11 +2953,8 @@ if (!exists("sweep_setting_DA_no_sd_jobs", inherits = FALSE)) {
   sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs", store = "_targets_HMP_2019")
 }
 sweep_setting_DA_no_sd_sim <- targets::tar_read("sweep_setting_DA_no_sd_sim", store = "_targets_HMP_2019")
-if (!exists("sweep_setting_DA_no_sd_jobs_with_threshold", inherits = FALSE)) {
-  sweep_setting_DA_no_sd_jobs_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_jobs_with_threshold", store = "_targets_HMP_2019")
-}
-if (!exists("sweep_setting_DA_no_sd_res", inherits = FALSE)) {
-  sweep_setting_DA_no_sd_res <- targets::tar_read("sweep_setting_DA_no_sd_res", store = "_targets_HMP_2019")
+if (!exists("sweep_setting_DA_no_sd_res_threshold_0_001", inherits = FALSE)) {
+  sweep_setting_DA_no_sd_res_threshold_0_001 <- targets::tar_read("sweep_setting_DA_no_sd_res_threshold_0_001", store = "_targets_HMP_2019")
 }
 # Use the same seed as PCoA plots for consistency (uses seed_idx_fig3 from figure-3-seed-selection chunk)
 available_seeds_fig3 <- unique(sweep_setting_DA_no_sd_jobs$seed)
@@ -2945,7 +2971,7 @@ sim_40_da_filtered$count_long <- filter_by_abundance_for_plot(
 
 # Run comparison for 40 DA case (filtered analysis from sweeps)
 cmp_40_da <- format_analysis_results_for_plotting(
-  analysis_results = get_sweep_analysis_with_threshold(sweep_setting_DA_no_sd_res, sweep_setting_DA_no_sd_jobs_with_threshold, seed_40_da_fig3, 40, threshold_fig3),
+  analysis_results = sweep_setting_DA_no_sd_res_threshold_0_001[[idx_40_da]],
   case_label = "Setting DA_no_sd (40 DA, filtered)"
 )
 
@@ -2953,7 +2979,7 @@ cmp_40_da <- format_analysis_results_for_plotting(
 rm(list = intersect(
   c(
     "sweep_setting_DA_no_sd_jobs", "sweep_setting_DA_no_sd_sim",
-    "sweep_setting_DA_no_sd_jobs_with_threshold", "sweep_setting_DA_no_sd_res",
+    "sweep_setting_DA_no_sd_res_threshold_0_001",
     "available_seeds_fig3", "idx_40_da"
   ),
   ls()
@@ -3159,7 +3185,7 @@ This setting sweeps over the number of DA taxa (0, 1, 2, 3, ...) using slopes sa
 ```{r supp-fig-3, fig.width=16, fig.height=16}
 sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs", store = "_targets_HMP_2019")
 sweep_setting_DA_sd_jobs <- targets::tar_read("sweep_setting_DA_sd_jobs", store = "_targets_HMP_2019")
-sweep_setting_DA_no_sd_res <- targets::tar_read("sweep_setting_DA_no_sd_res", store = "_targets_HMP_2019")
+sweep_setting_DA_no_sd_res_unfiltered <- targets::tar_read("sweep_setting_DA_no_sd_res_unfiltered", store = "_targets_HMP_2019")
 sweep_setting_DA_sd_res <- targets::tar_read("sweep_setting_DA_sd_res", store = "_targets_HMP_2019")
 # Use available seeds (with n_reps_auc=2, we have seeds 12001 and 12002)
 available_seeds_supp <- unique(sweep_setting_DA_no_sd_jobs$seed)
@@ -3175,16 +3201,16 @@ rm(list = intersect(c("sweep_setting_DA_no_sd_jobs", "sweep_setting_DA_sd_jobs",
 invisible(gc())
 
 # Format analysis results for plotting
-analysis_DA_no_sd_1 <- format_analysis_results_for_plotting(sweep_setting_DA_no_sd_res[[idx_1_da]], case_label = "1 DA")
-analysis_DA_no_sd_20 <- format_analysis_results_for_plotting(sweep_setting_DA_no_sd_res[[idx_20_da]], case_label = "20 DA")
-analysis_DA_no_sd_40 <- format_analysis_results_for_plotting(sweep_setting_DA_no_sd_res[[idx_40_da]], case_label = "40 DA")
+analysis_DA_no_sd_1 <- format_analysis_results_for_plotting(sweep_setting_DA_no_sd_res_unfiltered[[idx_1_da]], case_label = "1 DA")
+analysis_DA_no_sd_20 <- format_analysis_results_for_plotting(sweep_setting_DA_no_sd_res_unfiltered[[idx_20_da]], case_label = "20 DA")
+analysis_DA_no_sd_40 <- format_analysis_results_for_plotting(sweep_setting_DA_no_sd_res_unfiltered[[idx_40_da]], case_label = "40 DA")
 
 analysis_DA_sd_1 <- format_analysis_results_for_plotting(sweep_setting_DA_sd_res[[idx_1_da]], case_label = "1 DA")
 analysis_DA_sd_20 <- format_analysis_results_for_plotting(sweep_setting_DA_sd_res[[idx_20_da]], case_label = "20 DA")
 analysis_DA_sd_40 <- format_analysis_results_for_plotting(sweep_setting_DA_sd_res[[idx_40_da]], case_label = "40 DA")
 
 # Large result lists are no longer needed once subset analyses are extracted
-rm(list = intersect(c("sweep_setting_DA_no_sd_res", "sweep_setting_DA_sd_res", "idx_1_da", "idx_20_da", "idx_40_da"), ls()))
+rm(list = intersect(c("sweep_setting_DA_no_sd_res_unfiltered", "sweep_setting_DA_sd_res", "idx_1_da", "idx_20_da", "idx_40_da"), ls()))
 invisible(gc())
 
 pcoa_panel_setting_DA_no_sd <- plot_pcoa_grid_multiple_methods(
@@ -3263,7 +3289,7 @@ ggsave("Supp_Figure_3_HMP_2019.pdf", fig_supp_3, width = 183, height = 230, unit
 rm(list = intersect(
   c(
     "sweep_setting_DA_no_sd_jobs", "sweep_setting_DA_sd_jobs",
-    "sweep_setting_DA_no_sd_res", "sweep_setting_DA_sd_res",
+    "sweep_setting_DA_no_sd_res_unfiltered", "sweep_setting_DA_sd_res",
     "analysis_DA_no_sd_1", "analysis_DA_no_sd_20", "analysis_DA_no_sd_40",
     "analysis_DA_sd_1", "analysis_DA_sd_20", "analysis_DA_sd_40",
     "pcoa_panel_setting_DA_no_sd", "pcoa_panel_setting_DA_sd",
