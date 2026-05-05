@@ -1085,56 +1085,63 @@ list(
   ),
   # Setting DA_sd: Analysis targets (with thresholds including unfiltered)
   tar_target(
-    sweep_setting_DA_sd_jobs_with_threshold,
-    {
-      sim_jobs <- sweep_setting_DA_sd_jobs
-      jobs <- tidyr::crossing(
-        seed = sim_jobs$seed,
-        n_da_taxa = sim_jobs$n_da_taxa,
-        threshold = abundance_thresholds
-      )
-      jobs$branch_index <- seq_len(nrow(jobs))
-      jobs
-    }
-  ),
-  tar_target(
-    sweep_setting_DA_sd_sim_with_threshold,
-    run_simulation_job_brito(
-      sweep_setting_DA_sd_jobs_with_threshold,
-      dispersion_intercept_by_taxon = sim_params$intercept_disp_realistic_taxon,
-      composition_intercept_by_taxon = sim_params$mu_inv_softmax_base_realistic,
-      mean_dispersion_assoc_slope = 0,
-      slope_effects_distribution = sccomp_params$slope_effects_significant,
-      sd_log_overdispersion = sim_params$sd_log_overdispersion_realistic,
-      n_taxa = sim_params$n_taxa,
-      n_samples = sim_params$n_samples,
-      n_samples_per_group = sim_params$n_samples_per_group,
-      library_size_mean = sim_params$library_size_mean,
-      library_size_sd = sim_params$library_size_sd
-    ) |> synthetic_sim_add_two_group_factor(c("non-IBD", "IBD")),
-    pattern = map(sweep_setting_DA_sd_jobs_with_threshold),
-    iteration = "list"
-  ),
-  tar_target(
-    sweep_setting_DA_sd_res,
+    sweep_setting_DA_sd_res_unfiltered,
     run_sweep_analysis_with_threshold(
-      sim_r = sweep_setting_DA_sd_sim_with_threshold,
-      threshold = sweep_setting_DA_sd_jobs_with_threshold$threshold,
-      seed = sweep_setting_DA_sd_sim_with_threshold$seed,
-      n_da_taxa = sweep_setting_DA_sd_jobs_with_threshold$n_da_taxa
+      sim_r = sweep_setting_DA_sd_sim,
+      threshold = 0.0,
+      seed = sweep_setting_DA_sd_sim$seed,
+      n_da_taxa = sweep_setting_DA_sd_jobs$n_da_taxa
     ),
-    pattern = map(sweep_setting_DA_sd_jobs_with_threshold, sweep_setting_DA_sd_sim_with_threshold),
+    pattern = map(sweep_setting_DA_sd_jobs, sweep_setting_DA_sd_sim),
     iteration = "list"
   ),
   tar_target(
-    sweep_setting_DA_sd_res_light,
-    lighten_sweep_analysis_result_for_fpr(sweep_setting_DA_sd_res),
-    pattern = map(sweep_setting_DA_sd_res),
+    sweep_setting_DA_sd_res_threshold_0_005,
+    run_sweep_analysis_with_threshold(
+      sim_r = sweep_setting_DA_sd_sim,
+      threshold = 0.005,
+      seed = sweep_setting_DA_sd_sim$seed,
+      n_da_taxa = sweep_setting_DA_sd_jobs$n_da_taxa
+    ),
+    pattern = map(sweep_setting_DA_sd_jobs, sweep_setting_DA_sd_sim),
+    iteration = "list"
+  ),
+  tar_target(
+    sweep_setting_DA_sd_res_threshold_0_001,
+    run_sweep_analysis_with_threshold(
+      sim_r = sweep_setting_DA_sd_sim,
+      threshold = 0.001,
+      seed = sweep_setting_DA_sd_sim$seed,
+      n_da_taxa = sweep_setting_DA_sd_jobs$n_da_taxa
+    ),
+    pattern = map(sweep_setting_DA_sd_jobs, sweep_setting_DA_sd_sim),
+    iteration = "list"
+  ),
+  tar_target(
+    sweep_setting_DA_sd_res_unfiltered_light,
+    lighten_sweep_analysis_result_for_fpr(sweep_setting_DA_sd_res_unfiltered),
+    pattern = map(sweep_setting_DA_sd_res_unfiltered),
+    iteration = "list"
+  ),
+  tar_target(
+    sweep_setting_DA_sd_res_threshold_0_005_light,
+    lighten_sweep_analysis_result_for_fpr(sweep_setting_DA_sd_res_threshold_0_005),
+    pattern = map(sweep_setting_DA_sd_res_threshold_0_005),
+    iteration = "list"
+  ),
+  tar_target(
+    sweep_setting_DA_sd_res_threshold_0_001_light,
+    lighten_sweep_analysis_result_for_fpr(sweep_setting_DA_sd_res_threshold_0_001),
+    pattern = map(sweep_setting_DA_sd_res_threshold_0_001),
     iteration = "list"
   ),
   tar_target(
     sweep_setting_DA_sd_fpr,
-    summarise_fpr(sweep_setting_DA_sd_res_light),
+    dplyr::bind_rows(
+      summarise_fpr(sweep_setting_DA_sd_res_unfiltered_light),
+      summarise_fpr(sweep_setting_DA_sd_res_threshold_0_005_light),
+      summarise_fpr(sweep_setting_DA_sd_res_threshold_0_001_light)
+    ),
     resources = tar_resources(
       crew = tar_resources_crew(controller = "elastic_320")
     )
@@ -3186,7 +3193,7 @@ This setting sweeps over the number of DA taxa (0, 1, 2, 3, ...) using slopes sa
 sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs", store = "_targets_HMP_2019")
 sweep_setting_DA_sd_jobs <- targets::tar_read("sweep_setting_DA_sd_jobs", store = "_targets_HMP_2019")
 sweep_setting_DA_no_sd_res_unfiltered <- targets::tar_read("sweep_setting_DA_no_sd_res_unfiltered", store = "_targets_HMP_2019")
-sweep_setting_DA_sd_res <- targets::tar_read("sweep_setting_DA_sd_res", store = "_targets_HMP_2019")
+sweep_setting_DA_sd_res_unfiltered <- targets::tar_read("sweep_setting_DA_sd_res_unfiltered", store = "_targets_HMP_2019")
 # Use available seeds (with n_reps_auc=2, we have seeds 12001 and 12002)
 available_seeds_supp <- unique(sweep_setting_DA_no_sd_jobs$seed)
 seed_1_da_supp <- available_seeds_supp[1]
@@ -3205,12 +3212,12 @@ analysis_DA_no_sd_1 <- format_analysis_results_for_plotting(sweep_setting_DA_no_
 analysis_DA_no_sd_20 <- format_analysis_results_for_plotting(sweep_setting_DA_no_sd_res_unfiltered[[idx_20_da]], case_label = "20 DA")
 analysis_DA_no_sd_40 <- format_analysis_results_for_plotting(sweep_setting_DA_no_sd_res_unfiltered[[idx_40_da]], case_label = "40 DA")
 
-analysis_DA_sd_1 <- format_analysis_results_for_plotting(sweep_setting_DA_sd_res[[idx_1_da]], case_label = "1 DA")
-analysis_DA_sd_20 <- format_analysis_results_for_plotting(sweep_setting_DA_sd_res[[idx_20_da]], case_label = "20 DA")
-analysis_DA_sd_40 <- format_analysis_results_for_plotting(sweep_setting_DA_sd_res[[idx_40_da]], case_label = "40 DA")
+analysis_DA_sd_1 <- format_analysis_results_for_plotting(sweep_setting_DA_sd_res_unfiltered[[idx_1_da]], case_label = "1 DA")
+analysis_DA_sd_20 <- format_analysis_results_for_plotting(sweep_setting_DA_sd_res_unfiltered[[idx_20_da]], case_label = "20 DA")
+analysis_DA_sd_40 <- format_analysis_results_for_plotting(sweep_setting_DA_sd_res_unfiltered[[idx_40_da]], case_label = "40 DA")
 
 # Large result lists are no longer needed once subset analyses are extracted
-rm(list = intersect(c("sweep_setting_DA_no_sd_res_unfiltered", "sweep_setting_DA_sd_res", "idx_1_da", "idx_20_da", "idx_40_da"), ls()))
+rm(list = intersect(c("sweep_setting_DA_no_sd_res_unfiltered", "sweep_setting_DA_sd_res_unfiltered", "idx_1_da", "idx_20_da", "idx_40_da"), ls()))
 invisible(gc())
 
 pcoa_panel_setting_DA_no_sd <- plot_pcoa_grid_multiple_methods(
@@ -3289,7 +3296,7 @@ ggsave("Supp_Figure_3_HMP_2019.pdf", fig_supp_3, width = 183, height = 230, unit
 rm(list = intersect(
   c(
     "sweep_setting_DA_no_sd_jobs", "sweep_setting_DA_sd_jobs",
-    "sweep_setting_DA_no_sd_res_unfiltered", "sweep_setting_DA_sd_res",
+    "sweep_setting_DA_no_sd_res_unfiltered", "sweep_setting_DA_sd_res_unfiltered",
     "analysis_DA_no_sd_1", "analysis_DA_no_sd_20", "analysis_DA_no_sd_40",
     "analysis_DA_sd_1", "analysis_DA_sd_20", "analysis_DA_sd_40",
     "pcoa_panel_setting_DA_no_sd", "pcoa_panel_setting_DA_sd",
