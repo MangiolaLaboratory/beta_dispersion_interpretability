@@ -824,8 +824,8 @@ tar_option_set(
     "dplyr", "tidyr", "purrr", "tibble", "stringr",
     "ggplot2", "vegan", "parallelly",
     "sccomp", "patchwork"
-  ),
-  cue = tar_cue("never")
+  )
+  #, cue = tar_cue("never")
 )
 
 #!/usr/bin/env R
