@@ -18,7 +18,7 @@ execute:
   fig.path: "HMP_2019_paper_figures/"
 ---
 
-> **Memory requirement:** Rendering this report can require about **40 GB of RAM**.
+> **Memory requirement:** Rendering this report can require about **100 GB of RAM**.
 
 ## Overview
 
@@ -2704,16 +2704,15 @@ seed_idx_fig3 <- 1
 # Create PCoA panel for Setting DA_no_sd (filtered) using sweep analysis outputs
 # Use threshold = 0.001 (0.1%) for filtered plots
 sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs", store = "_targets_HMP_2019")
-sweep_setting_DA_no_sd_res_threshold_0_001 <- targets::tar_read("sweep_setting_DA_no_sd_res_threshold_0_001", store = "_targets_HMP_2019")
 # Use the same seed for all cases (1, 10, 40 DA) for consistency
 available_seeds <- unique(sweep_setting_DA_no_sd_jobs$seed)
 seed_fig3_pcoa <- available_seeds[min(seed_idx_fig3, length(available_seeds))]
 threshold_filtered <- 0.001  # Use 0.1% threshold for filtered plots
 
 # Get filtered (0.1% threshold) analysis results using the same seed
-analysis_1_raw <- sweep_setting_DA_no_sd_res_threshold_0_001[[get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_fig3_pcoa, 1)]]
-analysis_10_raw <- sweep_setting_DA_no_sd_res_threshold_0_001[[get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_fig3_pcoa, 10)]]
-analysis_40_raw <- sweep_setting_DA_no_sd_res_threshold_0_001[[get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_fig3_pcoa, 40)]]
+analysis_1_raw <- targets::tar_read("sweep_setting_DA_no_sd_res_threshold_0_001", store = "_targets_HMP_2019", branches = get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_fig3_pcoa, 1))[[1]]
+analysis_10_raw <- targets::tar_read("sweep_setting_DA_no_sd_res_threshold_0_001", store = "_targets_HMP_2019", branches = get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_fig3_pcoa, 10))[[1]]
+analysis_40_raw <- targets::tar_read("sweep_setting_DA_no_sd_res_threshold_0_001", store = "_targets_HMP_2019", branches = get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_fig3_pcoa, 40))[[1]]
 if (is.null(analysis_1_raw)) stop("analysis_1_raw is NULL")
 if (is.null(analysis_10_raw)) stop("analysis_10_raw is NULL")
 if (is.null(analysis_40_raw)) stop("analysis_40_raw is NULL")
@@ -2959,17 +2958,14 @@ print(fpr_fig3 %>% dplyr::arrange(method))
 if (!exists("sweep_setting_DA_no_sd_jobs", inherits = FALSE)) {
   sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs", store = "_targets_HMP_2019")
 }
-sweep_setting_DA_no_sd_sim <- targets::tar_read("sweep_setting_DA_no_sd_sim", store = "_targets_HMP_2019")
-if (!exists("sweep_setting_DA_no_sd_res_threshold_0_001", inherits = FALSE)) {
-  sweep_setting_DA_no_sd_res_threshold_0_001 <- targets::tar_read("sweep_setting_DA_no_sd_res_threshold_0_001", store = "_targets_HMP_2019")
-}
+
 # Use the same seed as PCoA plots for consistency (uses seed_idx_fig3 from figure-3-seed-selection chunk)
 available_seeds_fig3 <- unique(sweep_setting_DA_no_sd_jobs$seed)
 seed_40_da_fig3 <- available_seeds_fig3[min(seed_idx_fig3, length(available_seeds_fig3))]
 # Use threshold = 0.001 (0.1%) for Figure 3
 threshold_fig3 <- 0.001
 idx_40_da <- get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_40_da_fig3, 40)
-sim_40_da <- sweep_setting_DA_no_sd_sim[[idx_40_da]]
+sim_40_da <- targets::tar_read("sweep_setting_DA_no_sd_sim", store = "_targets_HMP_2019", branches = idx_40_da)[[1]]
 sim_40_da_filtered <- sim_40_da
 sim_40_da_filtered$count_long <- filter_by_abundance_for_plot(
   sim_40_da$count_long,
@@ -2978,7 +2974,7 @@ sim_40_da_filtered$count_long <- filter_by_abundance_for_plot(
 
 # Run comparison for 40 DA case (filtered analysis from sweeps)
 cmp_40_da <- format_analysis_results_for_plotting(
-  analysis_results = sweep_setting_DA_no_sd_res_threshold_0_001[[idx_40_da]],
+  analysis_results = targets::tar_read("sweep_setting_DA_no_sd_res_threshold_0_001", store = "_targets_HMP_2019", branches = idx_40_da)[[1]],
   case_label = "Setting DA_no_sd (40 DA, filtered)"
 )
 
@@ -3192,8 +3188,7 @@ This setting sweeps over the number of DA taxa (0, 1, 2, 3, ...) using slopes sa
 ```{r supp-fig-3, fig.width=16, fig.height=16}
 sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs", store = "_targets_HMP_2019")
 sweep_setting_DA_sd_jobs <- targets::tar_read("sweep_setting_DA_sd_jobs", store = "_targets_HMP_2019")
-sweep_setting_DA_no_sd_res_unfiltered <- targets::tar_read("sweep_setting_DA_no_sd_res_unfiltered", store = "_targets_HMP_2019")
-sweep_setting_DA_sd_res_unfiltered <- targets::tar_read("sweep_setting_DA_sd_res_unfiltered", store = "_targets_HMP_2019")
+
 # Use available seeds (with n_reps_auc=2, we have seeds 12001 and 12002)
 available_seeds_supp <- unique(sweep_setting_DA_no_sd_jobs$seed)
 seed_1_da_supp <- available_seeds_supp[1]
@@ -3208,13 +3203,13 @@ rm(list = intersect(c("sweep_setting_DA_no_sd_jobs", "sweep_setting_DA_sd_jobs",
 invisible(gc())
 
 # Format analysis results for plotting
-analysis_DA_no_sd_1 <- format_analysis_results_for_plotting(sweep_setting_DA_no_sd_res_unfiltered[[idx_1_da]], case_label = "1 DA")
-analysis_DA_no_sd_20 <- format_analysis_results_for_plotting(sweep_setting_DA_no_sd_res_unfiltered[[idx_20_da]], case_label = "20 DA")
-analysis_DA_no_sd_40 <- format_analysis_results_for_plotting(sweep_setting_DA_no_sd_res_unfiltered[[idx_40_da]], case_label = "40 DA")
+analysis_DA_no_sd_1 <- format_analysis_results_for_plotting(targets::tar_read("sweep_setting_DA_no_sd_res_unfiltered", store = "_targets_HMP_2019", branches = idx_1_da)[[1]], case_label = "1 DA")
+analysis_DA_no_sd_20 <- format_analysis_results_for_plotting(targets::tar_read("sweep_setting_DA_no_sd_res_unfiltered", store = "_targets_HMP_2019", branches = idx_20_da)[[1]], case_label = "20 DA")
+analysis_DA_no_sd_40 <- format_analysis_results_for_plotting(targets::tar_read("sweep_setting_DA_no_sd_res_unfiltered", store = "_targets_HMP_2019", branches = idx_40_da)[[1]], case_label = "40 DA")
 
-analysis_DA_sd_1 <- format_analysis_results_for_plotting(sweep_setting_DA_sd_res_unfiltered[[idx_1_da]], case_label = "1 DA")
-analysis_DA_sd_20 <- format_analysis_results_for_plotting(sweep_setting_DA_sd_res_unfiltered[[idx_20_da]], case_label = "20 DA")
-analysis_DA_sd_40 <- format_analysis_results_for_plotting(sweep_setting_DA_sd_res_unfiltered[[idx_40_da]], case_label = "40 DA")
+analysis_DA_sd_1 <- format_analysis_results_for_plotting(targets::tar_read("sweep_setting_DA_sd_res_unfiltered", store = "_targets_HMP_2019", branches = idx_1_da)[[1]], case_label = "1 DA")
+analysis_DA_sd_20 <- format_analysis_results_for_plotting(targets::tar_read("sweep_setting_DA_sd_res_unfiltered", store = "_targets_HMP_2019", branches = idx_20_da)[[1]], case_label = "20 DA")
+analysis_DA_sd_40 <- format_analysis_results_for_plotting(targets::tar_read("sweep_setting_DA_sd_res_unfiltered", store = "_targets_HMP_2019", branches = idx_40_da)[[1]], case_label = "40 DA")
 
 # Large result lists are no longer needed once subset analyses are extracted
 rm(list = intersect(c("sweep_setting_DA_no_sd_res_unfiltered", "sweep_setting_DA_sd_res_unfiltered", "idx_1_da", "idx_20_da", "idx_40_da"), ls()))
