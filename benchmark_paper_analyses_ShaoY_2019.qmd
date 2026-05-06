@@ -1519,8 +1519,8 @@ cat("sigma (exp(intercept_dispersion)):", format(sigma_real, scientific = TRUE, 
 cat("\nNote: This is very low overdispersion (σ ≈ 0.006), consistent with high precision.\n")
 ```
 
-```{r additional-parameter-plots}
-#| eval: !expr Sys.info()[["sysname"]] != "Darwin"
+```{r additional-parameter-plots, eval=FALSE}
+#| eval: !expr Sys.info()[["sysname"]] == "Darwin"
 # CmdStan draw CSVs are not available locally on macOS (absolute paths from Linux cluster).
 
 # 1. Intercept c_effect in softmax scale (proportions)
@@ -1668,8 +1668,8 @@ p_v_effect_slope <- ggplot(data.frame(log_overdispersion = log_overdispersion_sl
   theme_multipanel
 ```
 
-```{r combined-parameter-plot, fig.width=16, fig.height=12}
-#| eval: !expr Sys.info()[["sysname"]] != "Darwin"
+```{r combined-parameter-plot, fig.width=16, fig.height=12, eval=FALSE}
+#| eval: !expr Sys.info()[["sysname"]] == "Darwin"
 
 # Combined parameter visualization
 # One row: intercept c_ and proportion, slope c_ and proportional fold, then OD intercept and slope
@@ -1708,9 +1708,9 @@ p_combined <- p_combined +
 p_combined
 ```
 
-```{r combined-parameter-plot-save-pdf}
+```{r combined-parameter-plot-save-pdf, eval=FALSE}
 #| echo: false
-#| eval: !expr Sys.info()[["sysname"]] != "Darwin"
+#| eval: !expr Sys.info()[["sysname"]] == "Darwin"
 ggsave("Figure_1_ShaoY_2019.pdf", p_combined, width = 183, height = 183/4, units = "mm")
 ```
 
@@ -2694,15 +2694,15 @@ threshold_filtered <- 0.001  # Use 0.1% threshold for filtered plots
 analysis_1_raw <- targets::tar_read(
   "sweep_setting_DA_no_sd_res",
   branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_fig3_pcoa, 1, threshold_filtered)
-)
+)[[1]]
 analysis_10_raw <- targets::tar_read(
   "sweep_setting_DA_no_sd_res",
   branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_fig3_pcoa, 10, threshold_filtered)
-)
+)[[1]]
 analysis_40_raw <- targets::tar_read(
   "sweep_setting_DA_no_sd_res",
   branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_fig3_pcoa, 40, threshold_filtered)
-)
+)[[1]]
 if (is.null(analysis_1_raw)) stop("analysis_1_raw is NULL")
 if (is.null(analysis_10_raw)) stop("analysis_10_raw is NULL")
 if (is.null(analysis_40_raw)) stop("analysis_40_raw is NULL")
@@ -2960,7 +2960,7 @@ idx_40_da <- get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_40_da_fig3, 40)
 sim_40_da <- targets::tar_read(
   "sweep_setting_DA_no_sd_sim",
   branches = idx_40_da
-)
+)[[1]]
 sim_40_da_filtered <- sim_40_da
 sim_40_da_filtered$count_long <- filter_by_abundance_for_plot(
   sim_40_da$count_long,
@@ -2972,7 +2972,7 @@ cmp_40_da <- format_analysis_results_for_plotting(
   analysis_results = targets::tar_read(
     "sweep_setting_DA_no_sd_res",
     branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_40_da_fig3, 40, threshold_fig3)
-  ),
+  )[[1]],
   case_label = "Setting DA_no_sd (40 DA, filtered)"
 )
 
@@ -3200,28 +3200,28 @@ invisible(gc())
 
 # Format analysis results for plotting
 analysis_DA_no_sd_1 <- format_analysis_results_for_plotting(
-  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_1_da),
+  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_1_da)[[1]],
   case_label = "1 DA"
 )
 analysis_DA_no_sd_20 <- format_analysis_results_for_plotting(
-  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_20_da),
+  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_20_da)[[1]],
   case_label = "20 DA"
 )
 analysis_DA_no_sd_40 <- format_analysis_results_for_plotting(
-  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_40_da),
+  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_40_da)[[1]],
   case_label = "40 DA"
 )
 
 analysis_DA_sd_1 <- format_analysis_results_for_plotting(
-  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_1_da),
+  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_1_da)[[1]],
   case_label = "1 DA"
 )
 analysis_DA_sd_20 <- format_analysis_results_for_plotting(
-  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_20_da),
+  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_20_da)[[1]],
   case_label = "20 DA"
 )
 analysis_DA_sd_40 <- format_analysis_results_for_plotting(
-  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_40_da),
+  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_40_da)[[1]],
   case_label = "40 DA"
 )
 
