@@ -1,0 +1,3345 @@
+---
+title: "Beta-diversity distance benchmark — paper figures"
+subtitle: "PERMDISP (`vegan::betadisper`) distance inputs benchmark"
+author: "Mangiola Laboratory"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    code-tools: true
+    fig-width: 10
+    fig-height: 8
+    theme: cosmo
+execute:
+  warning: false
+  message: false
+  fig.path: "bd_benchmark_paper_figures/"
+---
+
+## Overview
+
+This report generates **paper-ready comparison figures** comparing multiple distance constructions for PERMDISP / `betadisper`:
+
+- **PERMDISP distance inputs**: Bray–Curtis, Aitchison, robust Aitchison, Jaccard, Hellinger
+
+**Simulation settings**: This report uses **Setting 5 from damping_optimization.qmd** (Moderate OD — Treatment Coding — Equal Baseline): σ ≈ 0.011, effect size = 2 for asymmetric DA, effect size = 1 for symmetric DA. The sweep plots (Figure 3) use equal baseline and treatment coding to match this setting.
+
+We intentionally keep the analysis narrow and figure-focused.
+
+## Method comparison
+
+```{r method-comparison-table}
+#| echo: false
+#| tbl-cap: "Key properties of distance constructions for PERMDISP / betadisper"
+
+library(knitr)
+library(kableExtra)
+
+# Define method categories
+methods <- c(
+  "PERMDISP distance inputs (Bray–Curtis, Aitchison, etc.)"
+)
+
+comparison_df <- data.frame(
+  Method = methods,
+  `Sensitive to dispersion` = c("Yes"),
+  `Sensitive to composition` = c("Yes"),
+  `Aware of mean–variance association` = c("No"),
+  `Residual-based` = c("No"),
+  `Handles zeros` = c("Pseudocount (Aitchison)"),
+  `π-aware variance` = c("No"),
+  check.names = FALSE
+)
+
+# Create table with Nature-style formatting (thick top and bottom borders)
+cat('<div style="border-top: 3px solid black; border-bottom: 3px solid black; padding: 10px 0; margin: 20px 0;">')
+kable(comparison_df, 
+      format = "html",
+      align = c("l", "c", "c", "c", "c", "c", "c"),
+      caption = "Key properties of distance constructions for PERMDISP / betadisper") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    htmltable_class = "nature-style-table"
+  ) %>%
+  row_spec(0, bold = TRUE, align = "c", extra_css = "border-bottom: 1px solid black;") %>%
+  column_spec(1, bold = TRUE) %>%
+  column_spec(2:7, width = "12em")
+cat('</div>')
+```
+
+**Key properties:**
+
+- **Sensitive to dispersion**: Detects true differential stochastic overdispersion when present.
+- **Sensitive to composition**: Produces false positives when groups differ only in mean composition (undesirable).
+- **Aware of mean–variance association**: Accounts for the relationship between mean abundance and variance (log(σ) = -k×μ + c).
+- **Residual-based**: Uses residuals (observed - expected) rather than raw counts/proportions.
+- **Handles zeros**: Strategy for zero-inflated data (pseudocount, filtering, etc.).
+- **π-aware variance**: Uses second-order delta method that explicitly incorporates expected proportions in variance calculations.
+
+## Setup
+
+```{r setup}
+#| include: false
+
+# Global filtering threshold will be loaded from targets pipeline
+
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(purrr)
+library(ggplot2)
+library(vegan)
+library(parallelly)
+library(patchwork)
+library(forcats)
+library(RColorBrewer)
+library(tidybulk)
+library(stringr)
+library(ggside)
+library(tidyHeatmap)
+library(sccomp)
+library(ggrepel)
+library(lme4)
+
+source("functions.R")
+
+# HMP2 / IBD benchmark labels (see synthetic_sim_add_two_group_factor in functions.R)
+annotate_hmp2_sim_groups <- function(sim_r) {
+  synthetic_sim_add_two_group_factor(sim_r, c("non-IBD", "IBD"))
+}
+
+knitr::opts_chunk$set(
+  fig.path = "ibd_paper_figures/",
+  dpi = 220
+)
+
+# --- Theme and formatting helpers ---
+# Theme for multipanel figures (from https://gist.github.com/stemangiola/fc67b08101df7d550683a5100106561c)
+theme_multipanel <-
+  theme_bw() +
+  theme(
+    panel.border = element_blank(),
+    axis.line = element_line(linewidth = 0.25),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    strip.background = element_blank(),
+    axis.title.y = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0), size = 7),
+    axis.title.x = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0), size = 7),
+    panel.spacing.x = unit(0.1, "lines"),
+    axis.text.x = element_text(size = 6),
+    axis.text.y = element_text(size = 6),
+    strip.text.x = element_text(size = 7),
+    strip.text.y = element_text(size = 7),
+    legend.key.size = unit(5, 'mm'),
+    legend.title = element_text(size = 7),
+    legend.text = element_text(size = 6),
+    strip.clip = "off",  # Avoid text clipping for facets
+    plot.title = element_text(size = 7),
+    axis.line.x = element_line(linewidth = 0.25),
+    axis.line.y = element_line(linewidth = 0.25),
+    axis.ticks.x = element_line(linewidth = 0.25),
+    axis.ticks.y = element_line(linewidth = 0.25)
+  )
+
+# Function to drop leading zero from proportions (0.xxx -> .xxx)
+dropLeadingZero <- function(l) {
+  stringr::str_replace(l, '0(?=\\.)', '')
+}
+
+# Helper function to format axis labels: exactly 2 significant digits
+# Examples: 25, 2.1, 0.2, 0.05
+format_axis_labels <- function(x) {
+  # Format to exactly 2 significant digits
+  formatted <- signif(x, 2)
+  
+  # Convert to character with appropriate precision
+  result <- character(length(formatted))
+  for (i in seq_along(formatted)) {
+    val <- formatted[i]
+    if (is.na(val)) {
+      result[i] <- "NA"
+    } else if (val == 0) {
+      result[i] <- "0"
+    } else {
+      val_abs <- abs(val)
+      if (val_abs >= 1) {
+        # For values >= 1: if integer, show as integer; otherwise 1 decimal
+      if (abs(val - round(val)) < 1e-6) {
+        result[i] <- as.character(round(val))
+      } else {
+        result[i] <- sprintf("%.1f", val)
+      }
+    } else {
+        # For values < 1: determine decimal places needed to show exactly 2 significant digits
+        # After signif(x, 2), we have a value with 2 significant digits
+        # We need to determine how many decimal places are needed to display both digits
+        
+        # Find the position of the first non-zero digit (most significant)
+        first_digit_pos <- floor(log10(val_abs))
+        # For 2 significant digits, we need to show digits at positions:
+        # first_digit_pos and (first_digit_pos - 1)
+        # Number of decimal places needed = -(first_digit_pos - 1) = -first_digit_pos + 1
+        # But we need at least enough to show the second digit
+        
+        # More precise: count how many digits after decimal are needed
+        # For 0.25: first digit at -1, second at -2, need 2 decimals
+        # For 0.05: first digit at -2, second at -3, need 2 decimals  
+        # For 0.2: first digit at -1, but 0.2 rounded to 2 sig digits is 0.20, need 2 decimals
+        # Actually, signif(0.2, 2) = 0.2, which has 1 sig digit, so we pad to show 2
+        
+        # The safest approach: use enough decimals to show 2 significant digits
+        # Maximum decimals needed = 2 (for values like 0.05)
+        # But we want minimum needed, so:
+        # If first digit is at position p, we need to show positions p and p-1
+        # Decimal places = max(1, -(p-1)) = max(1, -p+1)
+        
+        # Actually simpler: for values < 1, we always need at least 1 decimal
+        # and at most 2 decimals to show 2 significant digits
+        # Let's use a fixed approach: try 2 decimals, then remove trailing zeros
+        
+        # Use 2 decimals max, then clean up trailing zeros
+        result[i] <- sprintf("%.2f", val)
+      }
+    }
+  }
+  
+  # Clean up trailing zeros after decimal point, but preserve standalone zeros
+  # Remove trailing zeros: "0.250" -> "0.25", "0.200" -> "0.2", but "0" stays "0"
+  result <- stringr::str_replace(result, '(\\.\\d*?)0+$', '\\1')
+  # Remove trailing decimal point: "1." -> "1"
+  result <- stringr::str_replace(result, '\\.$', '')
+  result
+}
+
+# --- Paper figure helpers (ggplot + patchwork) ---
+plot_betadisper_pcoa_and_boxplot <- function(
+  bd,
+  title_prefix = "",
+  hull = TRUE,
+  segments = TRUE,
+  label = TRUE,
+  cols = c("non-IBD" = "#E74C3C", "IBD" = "#3498DB"),
+  p_value = NULL,
+  p_se = NULL,
+  n_perm = NULL,
+  show_group_legend = TRUE,
+  horizontal_box = FALSE
+) {
+  # Match vegan::plot.betadisper defaults:
+  # - asp = 1
+  # - hull = TRUE (convex hull)
+  # - segments = TRUE (spider to centroid)
+  # - label = TRUE (centroid labels)
+  sites <- as.data.frame(vegan::scores(bd, display = "sites"))
+  if (ncol(sites) < 2) stop("betadisper site scores have < 2 dimensions.")
+  colnames(sites)[1:2] <- c("Axis1", "Axis2")
+  sites$group <- factor(bd$group, levels = levels(bd$group))
+  # Ensure IBD is drawn after non-IBD (on top) in layered geoms.
+  sites <- sites %>% dplyr::arrange(.data$group)
+
+  centroids <- as.data.frame(vegan::scores(bd, display = "centroids"))
+  if (ncol(centroids) < 2) stop("betadisper centroid scores have < 2 dimensions.")
+  colnames(centroids)[1:2] <- c("Axis1", "Axis2")
+  centroids$group <- factor(rownames(centroids), levels = levels(bd$group))
+  centroids <- centroids %>% dplyr::arrange(.data$group)
+
+  # `cols` is a named vector mapping non-IBD/IBD to colors
+
+  seg_df <- NULL
+  if (segments) {
+    seg_df <- sites %>%
+      dplyr::left_join(centroids %>% dplyr::select(group, cx = Axis1, cy = Axis2), by = "group")
+  }
+
+  hull_df <- NULL
+  if (hull) {
+    hull_df <- sites %>%
+      dplyr::group_by(group) %>%
+      dplyr::group_modify(\(d, ...) {
+        if (nrow(d) < 3) return(d[0, , drop = FALSE])
+        idx <- grDevices::chull(d$Axis1, d$Axis2)
+        d[idx, , drop = FALSE] %>% dplyr::slice(c(seq_len(n()), 1))
+      }) %>%
+      dplyr::ungroup() %>%
+      dplyr::arrange(.data$group)
+  }
+
+  p_pcoa <- ggplot() +
+    {if (segments) geom_segment(
+      data = seg_df,
+      aes(x = cx, y = cy, xend = Axis1, yend = Axis2, color = group),
+      linewidth = 0.1,
+      alpha = 0.5
+    )} +
+    {if (hull) geom_polygon(
+      data = hull_df,
+      aes(x = Axis1, y = Axis2, fill = group, group = group, color = group),
+      alpha = 0.15,
+      linewidth = 0.1
+    )} +
+    geom_point(
+      data = sites,
+      aes(x = Axis1, y = Axis2, color = group, shape = group),
+      size = 0.1,
+      alpha = 0.8,
+      stroke = 0
+    ) +
+    geom_point(
+      data = centroids,
+      aes(x = Axis1, y = Axis2, color = group),
+      shape = 16,
+      size = 0.1,
+      stroke = 0
+    ) +
+    scale_color_manual(
+      values = cols,
+      labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"),
+      name = NULL,
+      guide = if (show_group_legend) "legend" else "none"
+    ) +
+    scale_shape_manual(
+      values = c("non-IBD" = 16, "IBD" = 17),  # 16 = filled circle, 17 = filled triangle
+      labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"),
+      name = NULL,
+      guide = if (show_group_legend) "legend" else "none"
+    ) +
+    scale_fill_manual(
+      values = cols,
+      labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"),
+      name = NULL,
+      guide = "none"  # Fill is only for polygon shading, not in legend
+    ) +
+    labs(
+      x = "PCoA 1",
+      y = "PCoA 2"
+    ) +
+    scale_x_continuous(labels = format_axis_labels) +
+    scale_y_continuous(labels = format_axis_labels) +
+    theme_multipanel +
+    theme(aspect.ratio = NULL)  # Allow PCoA plot to resize based on patchwork width
+
+  dist_df <- tibble::tibble(
+    group = factor(bd$group, levels = c("non-IBD", "IBD")),
+    distance = unname(bd$distances)
+  )
+
+  fmt_p <- function(p) {
+    if (!is.finite(p)) return("NA")
+    if (p < 0.001) return("<0.001")
+    sprintf("%.3f", p)
+  }
+  ann_label <- NULL
+  if (!is.null(p_value)) {
+    ann_label <- paste0("p = ", fmt_p(p_value))
+    # MC SE and permutation count removed - described in figure caption
+  }
+  y_max <- max(dist_df$distance, na.rm = TRUE)
+  y_annotate <- if (is.finite(y_max)) y_max else NA_real_
+  x_min <- min(dist_df$distance, na.rm = TRUE)
+  x_rng <- diff(range(dist_df$distance, na.rm = TRUE))
+  x_annotate_left <- if (is.finite(x_min) && is.finite(x_rng)) x_min + 0.02 * x_rng else x_min
+
+  if (horizontal_box) {
+    # Vertical boxplot: group on x-axis, distance on y-axis (even when horizontal_box=TRUE, use vertical for consistency)
+    p_box <- ggplot(dist_df, aes(x = group, y = distance, fill = group)) +
+      geom_boxplot(width = 0.5, outlier.size = 0.1, alpha = 0.85, linewidth = 0.25, outlier.stroke = 0) +
+      geom_jitter(width = 0.12, size = 1.0, alpha = 0.25, stroke = 0) +
+      scale_fill_manual(values = cols, guide = "none") +
+      scale_x_discrete(labels = c("non-IBD" = "non-IBD", "IBD" = "IBD")) +
+      labs(x = NULL, y = "Distance to centroid") +
+      {if (!is.null(ann_label)) annotate(
+        geom = "text",
+        x = 1.5,
+        y = Inf,
+        label = ann_label,
+        size = 3.0,
+        fontface = "plain",
+        vjust = 1.1
+      )} +
+      coord_cartesian(clip = "off") +
+      theme_multipanel +
+      theme(
+        aspect.ratio = NULL  # Allow boxplot to resize based on patchwork width
+      )
+  } else {
+    # Vertical boxplot: group on x-axis, distance on y-axis
+    p_box <- ggplot(dist_df, aes(x = group, y = distance, fill = group)) +
+      geom_boxplot(width = 0.5, outlier.size = 0.1, alpha = 0.85, linewidth = 0.25, outlier.stroke = 0) +
+      geom_jitter(width = 0.12, size = 1.0, alpha = 0.25, stroke = 0) +
+      scale_fill_manual(values = cols, guide = "none") +
+      scale_x_discrete(labels = c("non-IBD" = "non-IBD", "IBD" = "IBD")) +
+      labs(x = NULL, y = "Distance to centroid") +
+      {if (!is.null(ann_label)) annotate(
+        geom = "text",
+        x = 1.5,
+        y = Inf,
+        label = ann_label,
+        size = 3.0,
+        fontface = "plain",
+        vjust = 1.1
+      )} +
+      coord_cartesian(clip = "off") +
+      theme_multipanel +
+      theme(
+        aspect.ratio = NULL  # Allow boxplot to resize based on patchwork width
+      )
+  }
+
+  list(pcoa = p_pcoa, box = p_box)
+}
+
+# Express centroid separation as a percentage of average group hull radius (PCoA 1-2).
+# 100% means a centroid shift equal to the average hull radius.
+compute_centroid_distance_pct_hull_radius <- function(bd) {
+  sites <- as.data.frame(vegan::scores(bd, display = "sites"))
+  if (ncol(sites) < 2) {
+    return(list(
+      centroid_dist_pcoa12 = NA_real_,
+      mean_hull_radius = NA_real_,
+      pct_of_mean_hull_radius = NA_real_
+    ))
+  }
+  colnames(sites)[1:2] <- c("Axis1", "Axis2")
+  sites$group <- bd$group
+
+  centroids <- as.data.frame(vegan::scores(bd, display = "centroids"))
+  if (nrow(centroids) != 2 || ncol(centroids) < 2) {
+    return(list(
+      centroid_dist_pcoa12 = NA_real_,
+      mean_hull_radius = NA_real_,
+      pct_of_mean_hull_radius = NA_real_
+    ))
+  }
+  colnames(centroids)[1:2] <- c("Axis1", "Axis2")
+  centroid_dist <- sqrt(sum((centroids[1, 1:2] - centroids[2, 1:2])^2))
+
+  hull_radii <- sites %>%
+    dplyr::group_by(group) %>%
+    dplyr::group_map(\(d, ...) {
+      if (nrow(d) < 3) return(NA_real_)
+      cx <- mean(d$Axis1, na.rm = TRUE)
+      cy <- mean(d$Axis2, na.rm = TRUE)
+      radial_dist <- sqrt((d$Axis1 - cx)^2 + (d$Axis2 - cy)^2)
+      max(radial_dist, na.rm = TRUE)
+    }) %>%
+    unlist(use.names = FALSE)
+
+  mean_hull_radius <- mean(hull_radii, na.rm = TRUE)
+  pct <- if (is.finite(mean_hull_radius) && mean_hull_radius > 0) {
+    100 * centroid_dist / mean_hull_radius
+  } else {
+    NA_real_
+  }
+
+  list(
+    centroid_dist_pcoa12 = centroid_dist,
+    mean_hull_radius = mean_hull_radius,
+    pct_of_mean_hull_radius = pct
+  )
+}
+
+# Format analysis results for plotting - takes output from run_analysis_job(return_full = TRUE)
+# This function formats analysis results into structures needed for plotting (stats, betadisper objects, distances)
+format_analysis_results_for_plotting <- function(
+  analysis_results,
+  case_label,
+  standard_distance_methods = c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
+) {
+  group_levels <- c("non-IBD", "IBD")
+
+  if (!is.list(analysis_results) || !"method_results" %in% names(analysis_results)) {
+    stop("analysis_results must be output from run_analysis_job(return_full = TRUE)")
+  }
+
+  method_results <- analysis_results$method_results
+  method_names <- names(method_results)
+  
+  # Validate that we have the expected methods
+  if (!is.character(standard_distance_methods) || length(standard_distance_methods) < 1) {
+    stop("standard_distance_methods must be a non-empty character vector.")
+  }
+  if (anyDuplicated(standard_distance_methods)) {
+    stop("standard_distance_methods contains duplicates.")
+  }
+
+  # Format statistics
+  stats <- purrr::imap_dfr(method_results, \(mr, mn) {
+    tibble::tibble(
+      case = case_label,
+      method = mn,
+      group1 = mr$group1,
+      group2 = mr$group2,
+      delta = mr$delta,
+      p_value = mr$p_value,
+      p_se = mr$p_se,
+      n_perm = mr$n_perm
+    )
+  }) %>%
+    dplyr::mutate(method = factor(.data$method, levels = method_names))
+
+  # Format distances for boxplots
+  distances_long <- purrr::imap_dfr(method_results, \(mr, mn) {
+    tibble::tibble(
+      sample_id = names(mr$distances),
+      group = mr$group,
+      distance = mr$distances,
+      method = mn
+    )
+  }) %>%
+    dplyr::mutate(
+      method = factor(.data$method, levels = method_names),
+      group = factor(.data$group, levels = group_levels)
+    )
+
+  # Extract betadisper objects
+  bd_by_method <- purrr::imap(method_results, \(mr, mn) mr$bd)
+  
+  # Return formatted results
+  list(
+    stats = stats,
+    bd_by_method = bd_by_method,
+    bd = list(
+      standard = method_results[[paste0("permdisp_", standard_distance_methods[[1]])]]$bd
+    ),
+    distances_long = distances_long
+  )
+}
+
+plot_alpha_diversity_scatter <- function(sim_result, case_label = "Case") {
+  # This is the same style used in the discovery report:
+  # `print(alpha_1$plot)` from `run_alpha_diversity_analysis()`.
+  # HMP2 IBD benchmark: group labels hardcoded for this QMD only.
+  alpha <- run_alpha_diversity_analysis(
+    sim_result,
+    case_label = case_label,
+    group_levels = c("non-IBD", "IBD"),
+    group_colors = c("non-IBD" = "#E74C3C", "IBD" = "#3498DB")
+  )
+  color_vals <- c("non-IBD" = "#E74C3C", "IBD" = "#3498DB")
+  # Update plot to use theme_multipanel and remove titles/subtitles
+  # Note: stat_ellipse linewidth is set in functions.R
+  # Add marginal densities using ggside (fill will inherit from color scale if overridden)
+  # Override point size to match boxplots (run_alpha_diversity_analysis uses size = 0.1)
+  alpha$plot +
+    labs(title = NULL, subtitle = NULL) +
+    theme_multipanel +
+    ggplot2::geom_point(ggplot2::aes(x = richness, y = pielou_evenness, color = group), 
+                        size = 1.0, alpha = 0.6, stroke = 0,
+                        position = ggplot2::position_jitter(width = 0.25, height = 0.003),
+                        inherit.aes = FALSE, data = alpha$data) +
+    ggside::geom_xsidedensity(aes(x = richness, fill = group), alpha = 0.5, linewidth = 0.25) +
+    ggside::geom_ysidedensity(aes(y = pielou_evenness, fill = group), alpha = 0.5, linewidth = 0.25) +
+    ggplot2::scale_fill_manual(values = color_vals, guide = "none") +
+    ggplot2::theme(
+      ggside.axis.ticks.x.bottom = ggplot2::element_line(linewidth = 0.25),
+      ggside.axis.ticks.y.left = ggplot2::element_line(linewidth = 0.25),
+      ggside.axis.line.x.bottom = ggplot2::element_line(linewidth = 0.25),
+      ggside.axis.line.y.left = ggplot2::element_line(linewidth = 0.25),
+      ggside.panel.scale.x = 0.15,
+      ggside.panel.scale.y = 0.15
+    )
+}
+
+# Whisker plot: 95% intervals of proportions per taxon and group,
+# with taxa ordered by overall mean abundance (descending).
+plot_mean_dispersion_scatter <- function(sim_result, case_label = "Case", cols = NULL) {
+  if (is.null(cols)) {
+    cols <- c(
+      "non-IBD" = RColorBrewer::brewer.pal(11, "PRGn")[10],
+      "IBD" = RColorBrewer::brewer.pal(11, "PRGn")[2]
+    )
+  }
+
+  d <- sim_result$count_long %>%
+    dplyr::mutate(proportion = count / library_size) %>%
+    dplyr::group_by(group, taxon_id) %>%
+    dplyr::summarise(
+      mean_prop = mean(proportion, na.rm = TRUE),
+      p_low = stats::quantile(proportion, 0.025, na.rm = TRUE),
+      p_high = stats::quantile(proportion, 0.975, na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  taxon_order <- d %>%
+    dplyr::group_by(taxon_id) %>%
+    dplyr::summarise(overall_mean = mean(mean_prop, na.rm = TRUE), .groups = "drop") %>%
+    dplyr::arrange(dplyr::desc(overall_mean)) %>%
+    dplyr::pull(taxon_id)
+
+  d <- d %>%
+    dplyr::mutate(taxon_id = factor(taxon_id, levels = taxon_order))
+
+  ggplot(d, aes(x = taxon_id, y = mean_prop, ymin = p_low, ymax = p_high, color = group)) +
+    ggplot2::geom_linerange(position = ggplot2::position_dodge(width = 0.6), linewidth = 0.25, alpha = 0.8) +
+    ggplot2::geom_point(position = ggplot2::position_dodge(width = 0.6), size = 0.8, stroke = 0) +
+    ggplot2::scale_color_manual(values = cols, labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"), name = NULL) +
+    ggplot2::scale_y_continuous(labels = function(x) dropLeadingZero(scales::percent_format(accuracy = 1)(x))) +
+    ggplot2::labs(
+      x = "Taxon (ordered by mean proportion)",
+      y = "Proportion (95% interval)"
+    ) +
+    theme_multipanel +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_blank(),
+      axis.ticks.x = ggplot2::element_blank()
+    )
+}
+
+# Distance input helpers live in `_targets.R` (analysis only).
+
+# Method label functions
+pretty_method_label <- function(method_key) {
+  if (startsWith(method_key, "permdisp_")) {
+    dm <- sub("^permdisp_", "", method_key)
+    if (dm == "bray") return("Bray–Curtis")
+    if (dm == "aitchison") return("Aitchison")
+    if (dm == "robust.aitchison") return("robust Aitchison")
+    if (dm == "jaccard") return("Jaccard")
+    if (dm == "hellinger") return("Hellinger")
+    return(dm)
+  }
+  method_key
+}
+
+pretty_method_label_roc <- function(method_key) {
+  # Short labels for ROC plots
+  if (startsWith(method_key, "permdisp_")) {
+    dm <- sub("^permdisp_", "", method_key)
+    if (dm == "bray") return("Bray–Curtis")
+    if (dm == "aitchison") return("Aitchison")
+    if (dm == "robust.aitchison") return("robust Aitchison")
+    if (dm == "jaccard") return("Jaccard")
+    if (dm == "hellinger") return("Hellinger")
+    return(dm)
+  }
+  method_key
+}
+
+pretty_method_label_box <- function(method_key) {
+  # Labels for boxplots (same as pretty_method_label)
+  pretty_method_label(method_key)
+}
+
+# Define consistent color scheme for all methods (used across all plots)
+roc_colors_all <- c(
+  "Bray–Curtis" = RColorBrewer::brewer.pal(9, "Set1")[1],
+  "Aitchison" = RColorBrewer::brewer.pal(9, "Set1")[2],
+  "robust Aitchison" = RColorBrewer::brewer.pal(9, "Set1")[3],
+  "Jaccard" = RColorBrewer::brewer.pal(9, "Set1")[4],
+  "Hellinger" = RColorBrewer::brewer.pal(9, "Set1")[5]
+)
+method_levels <- names(roc_colors_all)
+
+# Single source of truth for method levels/colors used in all sweeps and summaries.
+coerce_method_levels <- function(x) {
+  x_chr <- trimws(as.character(x))
+  unknown <- setdiff(unique(x_chr), method_levels)
+  if (length(unknown) > 0) {
+    stop("Unknown method labels (no color mapping defined): ", paste(unknown, collapse = ", "))
+  }
+  factor(x_chr, levels = method_levels)
+}
+
+# format_analysis_results_for_plotting is defined in this QMD (plotting helper function)
+```
+
+```{r prepare-sccomp-results-if-needed}
+#| include: false
+#| cache: false
+
+# HMP2 sccomp fit. Prefer rebuilding from local BIOM + metadata inputs so the
+# preprocessing is explicit and reproducible in this report.
+sccomp_file_path <- "HMP2_sccomp_results.rds"
+zenodo_url <- "https://zenodo.org/records/19144244/files/HMP2_sccomp_results.rds?download=1"
+biom_file <- "taxonomic_profiles.biom"
+meta_file <- "hmp2_metadata.csv"
+
+if (!file.exists(sccomp_file_path)) {
+  # Previous fallback:
+  # download.file(zenodo_url, sccomp_file_path, mode = "wb")
+
+  if (!file.exists(biom_file)) {
+    stop("Missing required HMP2 BIOM input: ", biom_file)
+  }
+  if (!file.exists(meta_file)) {
+    stop("Missing required HMP2 metadata input: ", meta_file)
+  }
+
+  suppressPackageStartupMessages({
+    library(phyloseq)
+    library(readr)
+  })
+
+  ps <- phyloseq::import_biom(biom_file)
+  meta <- readr::read_csv(meta_file, show_col_types = FALSE)
+
+  otu_mat <- as(phyloseq::otu_table(ps), "matrix")
+  if (!phyloseq::taxa_are_rows(ps)) {
+    otu_mat <- t(otu_mat)
+  }
+
+  otu_df <- as.data.frame(otu_mat) |>
+    tibble::rownames_to_column("taxa") |>
+    tidyr::pivot_longer(cols = -taxa, names_to = "sample", values_to = "count") |>
+    dplyr::mutate(count = as.integer(round(count)))
+
+  otu_df <- otu_df |>
+    dplyr::group_by(sample) |>
+    dplyr::filter(sum(count) > 0) |>
+    dplyr::ungroup()
+
+  nonzero_taxa <- otu_df |>
+    dplyr::group_by(taxa) |>
+    dplyr::summarise(nz = sum(count > 0), .groups = "drop") |>
+    dplyr::filter(nz > 0) |>
+    dplyr::pull(taxa)
+
+  otu_df <- otu_df |>
+    dplyr::filter(taxa %in% nonzero_taxa)
+
+  tax_df <- as.data.frame(phyloseq::tax_table(ps)) |>
+    tibble::rownames_to_column("taxa") |>
+    dplyr::mutate(Rank1 = as.character(Rank1))
+
+  extract_genus <- function(x) {
+    if (is.na(x) || x == "") {
+      return("Unclassified")
+    }
+    parts <- strsplit(x, ";", fixed = TRUE)[[1]]
+    parts <- trimws(parts)
+    if (length(parts) >= 6) {
+      parts[6]
+    } else {
+      NA_character_
+    }
+  }
+
+  tax_df <- tax_df |>
+    dplyr::mutate(Genus = vapply(Rank1, extract_genus, FUN.VALUE = character(1))) |>
+    dplyr::select(taxa, Genus)
+
+  otu_genus <- otu_df |>
+    dplyr::left_join(tax_df, by = "taxa") |>
+    dplyr::mutate(Genus = dplyr::if_else(is.na(Genus) | Genus == "", "Unclassified", Genus)) |>
+    dplyr::group_by(sample, Genus) |>
+    dplyr::summarise(count = sum(count), .groups = "drop")
+
+  meta_norm <- meta |>
+    dplyr::mutate(sample = trimws(as.character(`External ID`))) |>
+    dplyr::filter(sample %in% phyloseq::sample_names(ps))
+
+  sccomp_input_genus <- otu_genus |>
+    dplyr::left_join(meta_norm, by = "sample") |>
+    dplyr::rename(cell_group = Genus) |>
+    dplyr::mutate(count = as.integer(count)) |>
+    dplyr::relocate(sample, cell_group, count) |>
+    dplyr::mutate(cell_group = stringr::str_replace(cell_group, "^_+", ""))
+
+  group_df <- sccomp_input_genus |>
+    dplyr::distinct(sample, diagnosis) |>
+    dplyr::mutate(group = ifelse(diagnosis %in% c("CD", "UC"), "IBD", "Healthy")) |>
+    dplyr::mutate(group = factor(group, levels = c("Healthy", "IBD")))
+
+  sccomp_input_genus <- sccomp_input_genus |>
+    dplyr::left_join(group_df |> dplyr::select(sample, group), by = "sample")
+
+  result <- sccomp::sccomp_estimate(
+    .data = sccomp_input_genus,
+    formula_composition = ~ 1 + group,
+    formula_variability = ~ 1 + group,
+    sample = "sample",
+    cell_group = "cell_group",
+    abundance = "count",
+    inference_method = "hmc",
+    bimodal_mean_variability_association = TRUE,
+    pass_fit = TRUE
+  )
+
+  saveRDS(result, sccomp_file_path)
+}
+```
+
+```{r targets-run}
+#| eval: true
+
+library(targets)
+library(VGAM)
+
+targets::tar_script({
+
+library(targets)
+library(tarchetypes)
+library(crew)
+library(crew.cluster)
+
+# Local controller for Mac development
+local_controller <- crew_controller_local(
+  name = "local",
+  workers = 8, #parallelly::availableCores(),
+  seconds_idle = 30
+)
+
+# SLURM controller for HPC/Linux
+# Helper (optional) to avoid repetition
+new_elastic <- function(name, mem_gb, time_min, workers, crashes_max, backup = NULL) {
+  crew_controller_slurm(
+    name = name,
+    workers = workers,
+    crashes_max = crashes_max,
+    seconds_idle = 30,
+    options_cluster = crew_options_slurm(
+      memory_gigabytes_required = mem_gb,
+      cpus_per_task = 2,
+      time_minutes = time_min
+    ),
+    backup = backup
+  )
+}
+
+# Small → large, with fallbacks to the next size up
+elastic_160 <- new_elastic("elastic_160", 160, 60 * 24, workers = 8,  crashes_max = 2)
+elastic_80  <- new_elastic("elastic_80",   80,  60 * 4,  workers = 16, crashes_max = 1, backup = elastic_160)
+elastic_40  <- new_elastic("elastic_40",   40,  60 * 4,  workers = 24, crashes_max = 1, backup = elastic_80)
+elastic_20  <- new_elastic("elastic_20",   20,  60 * 4,  workers = 32, crashes_max = 1, backup = elastic_40)
+elastic_10  <- new_elastic("elastic_10",   10,  60 * 4,  workers = 48, crashes_max = 1, backup = elastic_20)
+elastic_5   <- new_elastic("elastic_5",     5, 60 * 4,  workers = 200, crashes_max = 6, backup = elastic_10)
+
+# Group for targets (small → large)
+slurm_controller <- crew_controller_group(
+  elastic_5, elastic_10, elastic_20, elastic_40, elastic_80, elastic_160
+)
+
+# Select controller based on OS
+controller <- if (Sys.info()["sysname"] == "Darwin") {
+  local_controller  # macOS
+} else {
+  slurm_controller   # Linux/HPC
+}
+
+tar_option_set(
+  memory = "transient",
+  garbage_collection = 100,
+  storage = "worker",
+  retrieval = "worker",
+  # error = "continue",
+  workspace_on_error = TRUE,
+  format = "rds",
+  controller = controller,
+  packages = c(
+    "dplyr", "tidyr", "purrr", "tibble", "stringr",
+    "ggplot2", "vegan", "parallelly",
+    "sccomp", "patchwork"
+  )
+)
+
+#!/usr/bin/env R
+
+# Helper functions for {targets} pipeline.
+# These mirror the parameter extraction logic in the Quarto report.
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(purrr)
+  library(tibble)
+  library(vegan)
+})
+
+source("functions.R")
+
+utils::globalVariables(c(
+  "parameter", "c_effect", "c_lower", "c_upper", "v_effect",
+  "sample_id", "taxon_id", "count", "library_size", "mean_prop",
+  "group", "n_da_taxa", "method", "p_value", "n_fp", "n_sims",
+  "simulate_compositional_bb"
+))
+
+load_sccomp_result <- function(path) {
+  readRDS(path)
+}
+
+annotate_hmp2_sim_groups <- function(sim_r) {
+  synthetic_sim_add_two_group_factor(sim_r, c("non-IBD", "IBD"))
+}
+
+list(
+  tar_target(
+    sccomp_result_file,
+    "HMP2_sccomp_results.rds",
+    format = "file"
+  ),
+  tar_target(
+    sccomp_result,
+    load_sccomp_result(sccomp_result_file)
+  ),
+  tar_target(
+    sccomp_params,
+    extract_sccomp_params(sccomp_result)
+  ),
+  # Number of simulation replications (set to small number for development)
+  tar_target(
+    n_reps_auc,
+    100L  # Change this to 20 or higher for final runs
+  ),
+  tar_target(
+    abundance_thresholds,
+    c(0.0, 0.005, 0.001)  # 0.0 = unfiltered, 0.005 = 0.5%, 0.001 = 0.1% 
+  ),
+  tar_target(
+    sim_params,
+    build_simulation_params(
+      sccomp_params,
+      n_reps_auc = n_reps_auc,
+      group_levels = c("non-IBD", "IBD")
+    )
+  ),
+  # Setting DA_no_sd: Simulation targets (differential abundance, no sd on overdispersion)
+  tar_target(
+    sweep_setting_DA_no_sd_jobs,
+    {
+      jobs <- tidyr::crossing(seed = sim_params$rep_seeds_auc, n_da_taxa = 0:40)
+      jobs$branch_index <- seq_len(nrow(jobs))
+      jobs$target_name <- "sweep_setting_DA_no_sd_sim"
+      jobs
+    }, packages = c("VGAM")
+  ),
+  tar_target(
+    sweep_setting_DA_no_sd_sim,
+    annotate_hmp2_sim_groups(run_simulation_job(
+      sweep_setting_DA_no_sd_jobs,
+      intercept_dispersion = sim_params$intercept_disp_realistic,
+      mu_base = sim_params$mu_inv_softmax_base_realistic,
+      k_fixed = 0,
+      slope_effects_distribution = sccomp_params$slope_effects_significant,
+      sd_log_overdispersion = 0,
+      n_taxa = sim_params$n_taxa,
+      n_samples = sim_params$n_samples,
+      n_samples_per_group = sim_params$n_samples_per_group,
+      library_size_mean = sim_params$library_size_mean,
+      library_size_sd = sim_params$library_size_sd
+    )),
+    pattern = map(sweep_setting_DA_no_sd_jobs),
+    iteration = "list"
+  ),
+  # Setting DA_no_sd: Analysis targets (with thresholds including unfiltered)
+  # Create jobs grid: sim results × thresholds (0.0 = unfiltered, 0.005, 0.001)
+  tar_target(
+    sweep_setting_DA_no_sd_jobs_with_threshold,
+    {
+      sim_jobs <- sweep_setting_DA_no_sd_jobs
+      jobs <- tidyr::crossing(
+        seed = sim_jobs$seed,
+        n_da_taxa = sim_jobs$n_da_taxa,
+        threshold = abundance_thresholds
+      )
+      jobs$branch_index <- seq_len(nrow(jobs))
+      jobs
+    }
+  ),
+  tar_target(
+    sweep_setting_DA_no_sd_sim_with_threshold,
+    annotate_hmp2_sim_groups(run_simulation_job(
+      sweep_setting_DA_no_sd_jobs_with_threshold,
+      intercept_dispersion = sim_params$intercept_disp_realistic,
+      mu_base = sim_params$mu_inv_softmax_base_realistic,
+      k_fixed = 0,
+      slope_effects_distribution = sccomp_params$slope_effects_significant,
+      sd_log_overdispersion = 0,
+      n_taxa = sim_params$n_taxa,
+      n_samples = sim_params$n_samples,
+      n_samples_per_group = sim_params$n_samples_per_group,
+      library_size_mean = sim_params$library_size_mean,
+      library_size_sd = sim_params$library_size_sd
+    )),
+    pattern = map(sweep_setting_DA_no_sd_jobs_with_threshold),
+    iteration = "list"
+  ),
+  tar_target(
+    sweep_setting_DA_no_sd_res,
+    {
+      threshold <- sweep_setting_DA_no_sd_jobs_with_threshold$threshold
+      
+      # Apply filtering (threshold = 0.0 keeps all taxa, effectively unfiltered)
+      sim_filtered <- sweep_setting_DA_no_sd_sim_with_threshold
+      sim_filtered$count_long <- filter_by_abundance_cases(
+        sweep_setting_DA_no_sd_sim_with_threshold$count_long,
+        threshold = threshold
+      )
+      result <- run_analysis_job(sim_r = sim_filtered, return_full = TRUE)
+      
+      # Add threshold to the result for later filtering/plotting
+      result$threshold <- threshold
+      result$seed <- sweep_setting_DA_no_sd_sim_with_threshold$seed
+      result$n_da_taxa <- sweep_setting_DA_no_sd_jobs_with_threshold$n_da_taxa
+      result
+    },
+    pattern = map(sweep_setting_DA_no_sd_jobs_with_threshold, sweep_setting_DA_no_sd_sim_with_threshold),
+    iteration = "list"
+  ),
+  tar_target(
+    sweep_setting_DA_no_sd_fpr,
+    summarise_fpr(sweep_setting_DA_no_sd_res)
+  ),
+  tar_target(
+    sweep_setting_DA_no_sd_permanova_res,
+    {
+      threshold <- sweep_setting_DA_no_sd_jobs_with_threshold$threshold
+      seed <- sweep_setting_DA_no_sd_sim_with_threshold$seed
+      n_da_taxa <- sweep_setting_DA_no_sd_jobs_with_threshold$n_da_taxa
+
+      run_permanova_job(
+        sim_r = sweep_setting_DA_no_sd_sim_with_threshold,
+        threshold = threshold,
+        seed = seed,
+        n_da_taxa = n_da_taxa,
+        permutations = 199
+      )
+    },
+    pattern = map(sweep_setting_DA_no_sd_jobs_with_threshold, sweep_setting_DA_no_sd_sim_with_threshold),
+    iteration = "list"
+  ),
+  tar_target(
+    sweep_setting_DA_no_sd_permanova_tpr,
+    summarise_permanova_tpr(dplyr::bind_rows(sweep_setting_DA_no_sd_permanova_res))
+  ),
+  # Setting DA_sd: Simulation targets (differential abundance, with sd on overdispersion)
+  tar_target(
+    sweep_setting_DA_sd_jobs,
+    {
+      jobs <- tidyr::crossing(seed = sim_params$rep_seeds_auc, n_da_taxa = 0:40)
+      jobs$branch_index <- seq_len(nrow(jobs))
+      jobs$target_name <- "sweep_setting_DA_sd_sim"
+      jobs
+    }, packages = c("VGAM")
+  ),
+  tar_target(
+    sweep_setting_DA_sd_sim,
+    annotate_hmp2_sim_groups(run_simulation_job(
+      sweep_setting_DA_sd_jobs,
+      intercept_dispersion = sim_params$intercept_disp_realistic,
+      mu_base = sim_params$mu_inv_softmax_base_realistic,
+      k_fixed = 0,
+      slope_effects_distribution = sccomp_params$slope_effects_significant,
+      sd_log_overdispersion = sccomp_params$prec_sd_real,
+      n_taxa = sim_params$n_taxa,
+      n_samples = sim_params$n_samples,
+      n_samples_per_group = sim_params$n_samples_per_group,
+      library_size_mean = sim_params$library_size_mean,
+      library_size_sd = sim_params$library_size_sd
+    )),
+    pattern = map(sweep_setting_DA_sd_jobs),
+    iteration = "list"
+  ),
+  # Setting DA_sd: Analysis targets (with thresholds including unfiltered)
+  tar_target(
+    sweep_setting_DA_sd_jobs_with_threshold,
+    {
+      sim_jobs <- sweep_setting_DA_sd_jobs
+      jobs <- tidyr::crossing(
+        seed = sim_jobs$seed,
+        n_da_taxa = sim_jobs$n_da_taxa,
+        threshold = abundance_thresholds
+      )
+      jobs$branch_index <- seq_len(nrow(jobs))
+      jobs
+    }
+  ),
+  tar_target(
+    sweep_setting_DA_sd_sim_with_threshold,
+    annotate_hmp2_sim_groups(run_simulation_job(
+      sweep_setting_DA_sd_jobs_with_threshold,
+      intercept_dispersion = sim_params$intercept_disp_realistic,
+      mu_base = sim_params$mu_inv_softmax_base_realistic,
+      k_fixed = 0,
+      slope_effects_distribution = sccomp_params$slope_effects_significant,
+      sd_log_overdispersion = sccomp_params$prec_sd_real,
+      n_taxa = sim_params$n_taxa,
+      n_samples = sim_params$n_samples,
+      n_samples_per_group = sim_params$n_samples_per_group,
+      library_size_mean = sim_params$library_size_mean,
+      library_size_sd = sim_params$library_size_sd
+    )),
+    pattern = map(sweep_setting_DA_sd_jobs_with_threshold),
+    iteration = "list"
+  ),
+  tar_target(
+    sweep_setting_DA_sd_res,
+    {
+      threshold <- sweep_setting_DA_sd_jobs_with_threshold$threshold
+
+      # Apply filtering (threshold = 0.0 keeps all taxa, effectively unfiltered)
+      sim_filtered <- sweep_setting_DA_sd_sim_with_threshold
+      sim_filtered$count_long <- filter_by_abundance_cases(
+        sweep_setting_DA_sd_sim_with_threshold$count_long,
+        threshold = threshold
+      )
+      result <- run_analysis_job(sim_r = sim_filtered, return_full = TRUE)
+      
+      result$threshold <- threshold
+      result$seed <- sweep_setting_DA_sd_sim_with_threshold$seed
+      result$n_da_taxa <- sweep_setting_DA_sd_jobs_with_threshold$n_da_taxa
+      result
+    },
+    pattern = map(sweep_setting_DA_sd_jobs_with_threshold, sweep_setting_DA_sd_sim_with_threshold),
+    iteration = "list"
+  ),
+  tar_target(
+    sweep_setting_DA_sd_fpr,
+    summarise_fpr(sweep_setting_DA_sd_res)
+  ),
+
+  # Setting DO_no_sd: Define jobs (differential overdispersion, no sd, no DA)
+  tar_target(
+    sweep_setting_DO_no_sd_jobs,
+    {
+      set.seed(105)
+      n_reps_roc <- sim_params$n_reps_auc
+      rep_seeds <- 21000 + seq_len(n_reps_roc)
+      delta_grid <- c(0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0)
+      jobs <- tidyr::crossing(seed = rep_seeds, delta = delta_grid, threshold = abundance_thresholds)
+      jobs$branch_index <- seq_len(nrow(jobs))
+      jobs
+    }
+  ),
+  
+  # Setting DO_no_sd: Run each job (simulation + analysis)
+  tar_target(
+    sweep_setting_DO_no_sd_res,
+    {
+      intercept_base <- -6
+      perm_reps_roc <- 199
+      methods <- c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
+      
+      seed <- sweep_setting_DO_no_sd_jobs$seed
+      delta <- sweep_setting_DO_no_sd_jobs$delta
+      threshold <- sweep_setting_DO_no_sd_jobs$threshold
+      intercept_disp_cohort <- c(intercept_base, intercept_base + delta)
+      intercept_disp_matrix <- outer(intercept_disp_cohort, rep(1, sim_params$n_taxa))
+
+      sim_r <- simulate_case_realistic_taxa(
+        slope_vector = rep(0, sim_params$n_taxa),
+        mu_inv_softmax = sim_params$mu_inv_softmax_base_realistic,
+        log_dispersion_assoc = sccomp_params$k_real,
+        intercept_dispersion_matrix = intercept_disp_matrix,
+        sd_log_overdispersion = 0,
+        seed = seed,
+        n_taxa = sim_params$n_taxa,
+        n_samples_per_group = sim_params$n_samples_per_group,
+        library_size_mean = sim_params$library_size_mean,
+        library_size_sd = sim_params$library_size_sd
+      )
+      sim_r <- annotate_hmp2_sim_groups(sim_r)
+
+      # Apply filtering (threshold = 0.0 keeps all taxa, effectively unfiltered)
+      sim_r$count_long <- filter_by_abundance_cases(sim_r$count_long, threshold = threshold)
+      n_taxa_after_filter <- length(unique(sim_r$count_long$taxon_id))
+      if (n_taxa_after_filter < 3) {
+        return(tibble::tibble(
+          seed = integer(0),
+          delta = numeric(0),
+          truth = logical(0),
+          method = character(0),
+          p_value = numeric(0),
+          centroid_dist = numeric(0),
+          centroid_sep_pcoa12 = numeric(0),
+          mean_hull_radius = numeric(0),
+          centroid_sep_pct_hull_radius = numeric(0)
+        ))
+      }
+
+      inputs_std <- purrr::set_names(
+        lapply(methods, \(dm) {
+          build_standard_betadisper_inputs_paper(
+            count_long = sim_r$count_long,
+            sample_metadata = sim_r$sample_metadata,
+            distance_method = dm,
+            group_levels = c("non-IBD", "IBD")
+          )
+        }),
+        nm = paste0("permdisp_", methods)
+      )
+
+      purrr::imap_dfr(inputs_std, \(inp, method_key) {
+        bd <- betadisper(inp$dist, inp$group)
+        p <- permutest_betadisper_fixed(bd, permutations = perm_reps_roc)$p_value
+
+        dist_df <- data.frame(distance = bd$distances, group = bd$group)
+        group_means <- tapply(dist_df$distance, dist_df$group, mean)
+        centroid_distance <- abs(group_means["IBD"] - group_means["non-IBD"])
+
+        # Centroid separation in PCoA 1-2, scaled by average group hull radius.
+        sites <- as.data.frame(vegan::scores(bd, display = "sites"))
+        centroids <- as.data.frame(vegan::scores(bd, display = "centroids"))
+        centroid_sep_pcoa12 <- NA_real_
+        mean_hull_radius <- NA_real_
+        centroid_sep_pct_hull_radius <- NA_real_
+        if (ncol(sites) >= 2 && nrow(centroids) == 2 && ncol(centroids) >= 2) {
+          colnames(sites)[1:2] <- c("Axis1", "Axis2")
+          sites$group <- bd$group
+          colnames(centroids)[1:2] <- c("Axis1", "Axis2")
+
+          centroid_sep_pcoa12 <- sqrt(sum((centroids[1, 1:2] - centroids[2, 1:2])^2))
+          hull_radii <- sites %>%
+            dplyr::group_by(group) %>%
+            dplyr::summarise(
+              hull_radius = {
+                cx <- mean(Axis1, na.rm = TRUE)
+                cy <- mean(Axis2, na.rm = TRUE)
+                max(sqrt((Axis1 - cx)^2 + (Axis2 - cy)^2), na.rm = TRUE)
+              },
+              .groups = "drop"
+            )
+          mean_hull_radius <- mean(hull_radii$hull_radius, na.rm = TRUE)
+          if (is.finite(mean_hull_radius) && mean_hull_radius > 0) {
+            centroid_sep_pct_hull_radius <- 100 * centroid_sep_pcoa12 / mean_hull_radius
+          }
+        }
+
+        tibble::tibble(
+          seed = seed,
+          delta = delta,
+          threshold = threshold,
+          truth = delta > 0,
+          method = pretty_method_label_roc(method_key),
+          p_value = p,
+          centroid_dist = as.numeric(centroid_distance),
+          centroid_sep_pcoa12 = as.numeric(centroid_sep_pcoa12),
+          mean_hull_radius = as.numeric(mean_hull_radius),
+          centroid_sep_pct_hull_radius = as.numeric(centroid_sep_pct_hull_radius)
+        )
+      })
+    },
+    pattern = map(sweep_setting_DO_no_sd_jobs)
+  ),
+  
+  # Setting DO_no_sd: Aggregate results
+  tar_target(
+    sweep_setting_DO_no_sd_fpr,
+    {
+      dplyr::bind_rows(sweep_setting_DO_no_sd_res) %>%
+        dplyr::mutate(score = -log10(pmax(p_value, 1e-300))) %>%
+        dplyr::filter(method != "Arcsin resid.")
+    }
+  )
+)
+
+
+}, script = "_targets.R", ask=FALSE)
+
+# Run the targets pipeline
+targets::tar_make(script = "_targets.R")
+```
+
+```{r targets-load}
+# Set up targets configuration and load basic parameters used throughout
+# Individual chunks will load their specific targets as needed
+targets_script <- file.path(getwd(), "_targets.R")
+if (!file.exists(targets_script)) {
+  qmd_dir <- dirname(knitr::current_input(dir = TRUE))
+  targets_script <- file.path(qmd_dir, "_targets.R")
+}
+targets::tar_config_set(script = targets_script)
+# Source helper functions from _targets.R AFTER tar_script/tar_make.
+source(targets_script)
+
+# Load basic parameters that are used in many places
+sccomp_params <- targets::tar_read("sccomp_params")
+sim_params <- targets::tar_read("sim_params")
+abundance_thresholds <- targets::tar_read("abundance_thresholds")
+# Default threshold for regular plots (use 0.005)
+abundance_threshold <- 0.005
+
+# Extract commonly used parameters
+n_samples_real <- sccomp_params$n_samples_real
+n_taxa_real <- sccomp_params$n_taxa_real
+k_real <- sccomp_params$k_real
+k_sd_real <- sccomp_params$k_sd_real
+c_real <- sccomp_params$c_real
+prec_sd_real <- sccomp_params$prec_sd_real
+intercept_effects <- sccomp_params$intercept_effects
+slope_effects <- sccomp_params$slope_effects
+slope_effects_significant <- sccomp_params$slope_effects_significant
+v_intercept <- sccomp_params$v_intercept
+v_slope <- sccomp_params$v_slope
+
+n_taxa <- sim_params$n_taxa
+n_samples_per_group <- sim_params$n_samples_per_group
+n_groups <- sim_params$n_groups
+n_samples <- sim_params$n_samples
+group_levels <- sim_params$group_levels
+library_size_mean <- sim_params$library_size_mean
+library_size_sd <- sim_params$library_size_sd
+mu_inv_softmax_base_realistic <- sim_params$mu_inv_softmax_base_realistic
+intercept_disp_realistic <- sim_params$intercept_disp_realistic
+sigma_realistic <- sim_params$sigma_realistic
+slope_realistic <- sim_params$slope_realistic
+n_reps_auc <- sim_params$n_reps_auc
+perm_reps_auc <- sim_params$perm_reps_auc
+rep_seeds_auc <- sim_params$rep_seeds_auc
+```
+
+
+## Shared simulation settings
+
+Simulation parameters and helper functions are now defined in the targets pipeline
+(`_targets.R`) and loaded via the `targets-load` chunk.
+
+
+
+# Data Properties
+
+## Goal
+
+Use **realistic simulation parameters extracted from HMP2 microbiome data** (sccomp fit) to evaluate the performance of various beta-diversity methods under conditions that mirror real microbiome datasets.
+
+This approach ensures our simulation sweeps reflect:
+
+1. **Real sample and taxa counts** from HMP2
+2. **Real mean-overdispersion association (k)** estimated from the data
+3. **Real variability around the association (σ)**
+4. **Real baseline abundance distribution** (intercept effects)
+5. **Real slope distribution** (group effects)
+
+## Extract Parameters from HMP2 sccomp Fit
+
+```{r load-sccomp-results, cache: false}
+# Load the sccomp results
+result <- readRDS("HMP2_sccomp_results.rds")
+
+# Extract fit object
+fit <- attr(result, "fit")
+
+# Get basic dataset dimensions from the result
+# The sccomp result stores dimensions in model_input (a list)
+model_input <- attr(result, "model_input")
+
+# Extract N (samples) and M (taxa/cell groups) from model_input list
+if (!is.null(model_input) && is.list(model_input)) {
+  n_samples_real <- model_input$N
+  n_taxa_real <- model_input$M
+} else {
+  # Fallback: use the cell_group column in result (unique taxa)
+  n_taxa_real <- length(unique(result$cell_group))
+  # Samples: from the sccomp print output
+  n_samples_real <- 178
+}
+
+cat("=== HMP2 Dataset Characteristics ===\n")
+cat("Number of samples:", n_samples_real, "\n")
+cat("Number of taxa (genera):", n_taxa_real, "\n")
+
+# Parameter names differ by sccomp version / formula (e.g. "(Intercept)" vs "Intercept").
+intercept_param <- if (any(result$parameter == "(Intercept)", na.rm = TRUE)) {
+  "(Intercept)"
+} else {
+  "Intercept"
+}
+group_parameter <- result |>
+  dplyr::filter(!.data$parameter %in% c("(Intercept)", "Intercept")) |>
+  dplyr::distinct(.data$parameter) |>
+  dplyr::pull(.data$parameter)
+if (length(group_parameter) < 1L) {
+  stop("Could not identify non-intercept parameter in sccomp result.")
+}
+group_parameter <- group_parameter[[1]]
+```
+
+```{r extract-dispersion-params}
+# Extract mean-overdispersion association coefficient (k)
+# 
+# sccomp uses PRECISION parameterization:
+#   log(precision) = prec_coeff[1] + prec_coeff[2] * log(mean)
+#
+# Our simulator uses OVERDISPERSION (sigma) parameterization:
+#   log(sigma) = c - k * log(mean)
+#
+# Since precision ≈ 1/sigma, we have log(sigma) ≈ -log(precision), so:
+#   c = -prec_coeff[1]
+#   k = prec_coeff[2]  (NOT negated! The minus is already in the formula)
+#
+prec_coeff_summary <- fit$summary("prec_coeff")
+
+# prec_coeff[1] is precision intercept, prec_coeff[2] is mean-precision slope
+prec_intercept <- prec_coeff_summary$mean[1]  # ≈ +5.16
+prec_slope <- prec_coeff_summary$mean[2]       # ≈ -0.64
+
+# Direct mapping to simulator parameters:
+# k = prec_slope (the simulator formula has -k, so negative prec_slope gives positive effect)
+k_real <- prec_slope  # ≈ -0.64
+k_sd_real <- prec_coeff_summary$sd[2]
+
+# c = -prec_intercept (convert from precision to overdispersion intercept)
+c_real <- -prec_intercept  # ≈ -5.16
+
+cat("\n=== Precision Parameters from sccomp ===\n")
+cat("prec_coeff[1] (precision intercept):", round(prec_intercept, 4), "\n")
+cat("prec_coeff[2] (mean-precision slope):", round(prec_slope, 4), "\n")
+
+cat("\n=== Converted to Overdispersion (sigma) Parameters ===\n")
+cat("k (log_dispersion_assoc = prec_slope):", round(k_real, 4), "\n")
+cat("c (intercept_dispersion = -prec_intercept):", round(c_real, 4), "\n")
+cat("SD of k:", round(k_sd_real, 4), "\n")
+
+cat("\n=== Interpretation ===\n")
+cat("With k =", round(k_real, 2), "and formula log(σ) = -k*log(μ) + c:\n")
+cat("  -k =", round(-k_real, 2), ", so higher mean → higher σ → MORE overdispersion ✓\n")
+
+# Extract precision SD (variability around the mean-od relationship)
+prec_sd_summary <- fit$summary("prec_sd")
+prec_sd_real <- prec_sd_summary$mean[1]
+
+cat("\n=== Precision SD (variability around k) ===\n")
+cat("Estimated prec_sd:", round(prec_sd_real, 4), "\n")
+cat("SD:", round(prec_sd_summary$sd[1], 4), "\n")
+```
+
+```{r extract-baseline-params}
+# Extract baseline abundance distribution (intercept effects for composition)
+intercept_effects <- result %>%
+  filter(parameter == intercept_param) %>%
+  pull(c_effect)
+
+cat("\n=== Baseline Abundance Distribution (Intercept c_effect) ===\n")
+cat("Mean:", round(mean(intercept_effects), 4), "\n")
+cat("SD:", round(sd(intercept_effects), 4), "\n")
+cat("Range: [", round(min(intercept_effects), 4), ",", 
+    round(max(intercept_effects), 4), "]\n")
+
+# Plot intercept distribution
+intercept_mean <- mean(intercept_effects)
+p_intercept <- ggplot(data.frame(c_effect = intercept_effects), aes(x = c_effect)) +
+  geom_density(fill = "lightgrey", alpha = 1, color = "black", linewidth = 0.3) +
+  geom_vline(xintercept = intercept_mean, linetype = "dashed", color = "grey50", linewidth = 0.5) +
+  geom_rug() +
+  labs(x = "inv. softmax proportion", y = "Density") +
+  scale_x_continuous(labels = format_axis_labels) +
+  scale_y_continuous(labels = format_axis_labels) +
+  theme_multipanel
+```
+
+```{r extract-slope-params}
+# Extract slope (group effect) distribution - ALL taxa
+slope_effects <- result %>%
+  filter(parameter == group_parameter) %>%
+  pull(c_effect)
+
+# Extract SIGNIFICANT slope effects (credible interval excludes 0)
+# sccomp results have c_lower and c_upper columns for credible intervals
+slope_data <- result %>%
+  filter(parameter == group_parameter)
+
+# Check if credible interval columns exist
+if ("c_lower" %in% names(slope_data) && "c_upper" %in% names(slope_data)) {
+  # Significant = credible interval does not include 0
+  slope_effects_significant <- slope_data %>%
+    filter(c_lower > 0 | c_upper < 0) %>%
+    pull(c_effect)
+} else {
+  # Fallback: use effect size threshold (|effect| > 0.5 as "significant")
+  slope_effects_significant <- slope_data %>%
+    filter(abs(c_effect) > 0.5) %>%
+    pull(c_effect)
+}
+
+cat("\n=== Group Effect Distribution (Slope c_effect for IBD) ===\n")
+cat("All taxa:\n")
+cat("  Mean:", round(mean(slope_effects), 4), "\n")
+cat("  SD:", round(sd(slope_effects), 4), "\n")
+cat("  Range: [", round(min(slope_effects), 4), ",", 
+    round(max(slope_effects), 4), "]\n")
+cat("  N taxa:", length(slope_effects), "\n")
+
+cat("\nSignificant taxa only (CI excludes 0 or |effect| > 0.5):\n")
+cat("  N significant:", length(slope_effects_significant), "\n")
+if (length(slope_effects_significant) > 0) {
+  cat("  Mean:", round(mean(slope_effects_significant), 4), "\n")
+  cat("  SD:", round(sd(slope_effects_significant), 4), "\n")
+  cat("  Range: [", round(min(slope_effects_significant), 4), ",", 
+      round(max(slope_effects_significant), 4), "]\n")
+}
+
+# Plot slope distribution - all taxa
+slope_mean <- mean(slope_effects)
+p_slope <- ggplot(data.frame(c_effect = slope_effects), aes(x = c_effect)) +
+  geom_density(fill = "lightgrey", alpha = 1, color = "black", linewidth = 0.3) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50", linewidth = 0.3) +
+  geom_vline(xintercept = slope_mean, linetype = "dashed", color = "grey50", linewidth = 0.5) +
+  geom_rug(alpha = 0.5) +
+  labs(x = "inv. softmax proportion", y = "Density") +
+  scale_x_continuous(labels = format_axis_labels) +
+  scale_y_continuous(labels = format_axis_labels) +
+  theme_multipanel
+```
+
+```{r extract-variability-params}
+# Extract variability parameters (v_effect for intercept and slope)
+# These are the per-taxon variability effects in sccomp
+v_intercept <- result %>%
+  filter(parameter == intercept_param) %>%
+  pull(v_effect)
+
+v_slope <- result %>%
+  filter(parameter == group_parameter) %>%
+  pull(v_effect)
+
+cat("\n=== Variability Parameters (v_effect) ===\n")
+cat("Intercept v_effect - Mean:", round(mean(v_intercept), 4), 
+    ", SD:", round(sd(v_intercept), 4), "\n")
+cat("Slope v_effect - Mean:", round(mean(v_slope), 4), 
+    ", SD:", round(sd(v_slope), 4), "\n")
+
+# Use c_real from precision conversion (c = -prec_intercept)
+# This is the proper intercept for our simulator's overdispersion parameterization
+intercept_dispersion_real <- c_real  # From extract-dispersion-params: c_real = -prec_intercept ≈ -5.16
+sigma_real <- exp(intercept_dispersion_real)
+
+cat("\n=== Simulation Intercept Dispersion (from precision conversion) ===\n")
+cat("intercept_dispersion (c = -prec_intercept):", round(intercept_dispersion_real, 4), "\n")
+cat("sigma (exp(intercept_dispersion)):", format(sigma_real, scientific = TRUE, digits = 3), "\n")
+cat("\nNote: This is very low overdispersion (σ ≈ 0.006), consistent with high precision.\n")
+```
+
+```{r additional-parameter-plots}
+# 1. Intercept c_effect in softmax scale (proportions)
+# Convert intercept effects to proportions using inv_softmax
+# We need to convert all intercept effects together to get proper proportions
+intercept_softmax <- inv_softmax(intercept_effects)
+
+arcsin_sqrt_trans_prop <- scales::trans_new(
+  name = "arcsin_sqrt",
+  transform = function(x) asin(sqrt(pmax(0, pmin(1, x)))),
+  inverse = function(y) sin(y)^2,
+  breaks = scales::extended_breaks(),
+  domain = c(0, 1)
+)
+
+cat("\n=== Intercept c_effect in Softmax Scale (Proportions) ===\n")
+cat("Mean:", round(mean(intercept_softmax), 4), "\n")
+cat("SD:", round(sd(intercept_softmax), 4), "\n")
+cat("Range: [", round(min(intercept_softmax), 4), ",", 
+    round(max(intercept_softmax), 4), "]\n")
+
+intercept_softmax_mean <- mean(intercept_softmax)
+p_intercept_softmax <- ggplot(data.frame(proportion = intercept_softmax), aes(x = proportion)) +
+  geom_density(fill = "lightblue", alpha = 1, color = "black", linewidth = 0.3) +
+  geom_vline(xintercept = intercept_softmax_mean, linetype = "dashed", color = "grey50", linewidth = 0.5) +
+  geom_rug() +
+  labs(x = "Proportion", y = "Density") +
+  scale_x_continuous(labels = format_axis_labels) +
+  scale_y_continuous(labels = format_axis_labels) +
+  theme_multipanel
+
+# 2. Effect in proportion fold change using sccomp_proportional_fold_change
+# Calculate proportional fold change from the full result object
+# Need to specify formula_composition and from/to groups
+prop_fold_change_data <- sccomp_proportional_fold_change(
+  result,
+  formula_composition = ~ group,
+  from = "Healthy",
+  to = "IBD"
+)
+
+prop_fold_change <- prop_fold_change_data[["proportion_fold_change"]]
+if (is.null(prop_fold_change)) {
+  pfc_cols <- names(prop_fold_change_data)
+  stop(
+    "sccomp_proportional_fold_change did not return a 'proportion_fold_change' column. ",
+    "Columns: ", paste(pfc_cols, collapse = ", ")
+  )
+}
+
+prop_fold_change_tbl <- prop_fold_change_data %>%
+  dplyr::select(cell_group, proportion_fold_change)
+
+significant_taxa <- result %>%
+  dplyr::filter(parameter == group_parameter) %>%
+  dplyr::filter(c_lower > 0 | c_upper < 0) %>%
+  dplyr::select(cell_group)
+
+prop_fold_change_sig <- prop_fold_change_tbl %>%
+  dplyr::inner_join(significant_taxa, by = "cell_group") %>%
+  dplyr::mutate(abs_fold_change = abs(proportion_fold_change))
+
+cat("\n=== Absolute Proportion Fold Change (significant group IBD only) ===\n")
+cat("N significant taxa:", nrow(prop_fold_change_sig), "\n")
+cat("Mean:", round(mean(prop_fold_change_sig$abs_fold_change, na.rm = TRUE), 4), "\n")
+cat("SD:", round(sd(prop_fold_change_sig$abs_fold_change, na.rm = TRUE), 4), "\n")
+cat("Range: [", round(min(prop_fold_change_sig$abs_fold_change, na.rm = TRUE), 4), ",", 
+    round(max(prop_fold_change_sig$abs_fold_change, na.rm = TRUE), 4), "]\n")
+
+prop_fold_change_mean <- mean(prop_fold_change_sig$abs_fold_change, na.rm = TRUE)
+p_prop_fold_change <- ggplot(prop_fold_change_sig, aes(x = abs_fold_change)) +
+  geom_density(fill = "lightblue", alpha = 1, color = "black", linewidth = 0.3) +
+  geom_vline(xintercept = prop_fold_change_mean, linetype = "dashed", color = "grey50", linewidth = 0.5) +
+  geom_rug() +
+  labs(x = "Absolute proportional fold change", y = "Density") +
+  scale_x_continuous(labels = format_axis_labels) +
+  scale_y_continuous(labels = format_axis_labels) +
+  theme_multipanel
+
+# 3. Distribution of v_effect (variability) - split by intercept and slope
+cat("\n=== Intercept v_effect Distribution ===\n")
+cat("Mean:", round(mean(v_intercept), 4), "\n")
+cat("SD:", round(sd(v_intercept), 4), "\n")
+cat("Range: [", round(min(v_intercept), 4), ",", 
+    round(max(v_intercept), 4), "]\n")
+
+# Convert v_effect (log precision) to log overdispersion: log(σ) ≈ -log(precision)
+log_overdispersion_intercept <- -v_intercept
+log_overdispersion_slope <- -v_slope
+
+cat("\n=== Log Overdispersion Intercept (converted from v_effect) ===\n")
+cat("Mean:", round(mean(log_overdispersion_intercept), 4), "\n")
+cat("SD:", round(sd(log_overdispersion_intercept), 4), "\n")
+cat("Range: [", round(min(log_overdispersion_intercept), 4), ",", 
+    round(max(log_overdispersion_intercept), 4), "]\n")
+
+log_overdispersion_intercept_mean <- mean(log_overdispersion_intercept)
+p_v_effect_intercept <- ggplot(data.frame(log_overdispersion = log_overdispersion_intercept), aes(x = log_overdispersion)) +
+  geom_density(fill = "lightgrey", alpha = 1, color = "black", linewidth = 0.3) +
+  geom_vline(xintercept = log_overdispersion_intercept_mean, linetype = "dashed", color = "grey50", linewidth = 0.5) +
+  geom_rug(alpha = 0.5) +
+  labs(x = "log overdispersion", y = "Density") +
+  scale_x_continuous(labels = format_axis_labels) +
+  scale_y_continuous(labels = format_axis_labels) +
+  theme_multipanel
+
+cat("\n=== Log Overdispersion Slope (converted from v_effect) ===\n")
+cat("Mean:", round(mean(log_overdispersion_slope), 4), "\n")
+cat("SD:", round(sd(log_overdispersion_slope), 4), "\n")
+cat("Range: [", round(min(log_overdispersion_slope), 4), ",", 
+    round(max(log_overdispersion_slope), 4), "]\n")
+
+log_overdispersion_slope_mean <- mean(log_overdispersion_slope)
+p_v_effect_slope <- ggplot(data.frame(log_overdispersion = log_overdispersion_slope), aes(x = log_overdispersion)) +
+  geom_density(fill = "lightgrey", alpha = 1, color = "black", linewidth = 0.3) +
+  geom_vline(xintercept = log_overdispersion_slope_mean, linetype = "dashed", color = "grey50", linewidth = 0.5) +
+  geom_rug(alpha = 0.5) +
+  labs(x = "log overdispersion", y = "Density") +
+  scale_x_continuous(labels = format_axis_labels) +
+  scale_y_continuous(labels = format_axis_labels) +
+  theme_multipanel
+```
+
+```{r combined-parameter-plot, fig.width=16, fig.height=12}
+# Combined parameter visualization
+# One row: intercept c_ and proportion, slope c_ and proportional fold, then OD intercept and slope
+# Remove y-axis labels, numbers, and ticks from all plots except the leftmost one
+# Also reduce side margins to minimize spacing between panels
+# Add titles on top of each distribution
+# Add small margins between panels (leftmost has no left margin, rightmost has no right margin)
+p_intercept_adj <- p_intercept + 
+  ggtitle("Intercept c_effect") +
+  theme(plot.margin = margin(0, 2, 0, 0, "pt"), plot.title = element_text(size = 8, hjust = 0.5))
+p_intercept_softmax_no_y <- p_intercept_softmax + 
+  ggtitle("Proportion") +
+  theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+        plot.margin = margin(0, 2, 0, 2, "pt"), plot.title = element_text(size = 8, hjust = 0.5))
+p_slope_no_y <- p_slope + 
+  ggtitle("Slope c_effect") +
+  theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+        plot.margin = margin(0, 2, 0, 2, "pt"), plot.title = element_text(size = 8, hjust = 0.5))
+p_prop_fold_change_no_y <- p_prop_fold_change + 
+  ggtitle("Proportional fold change") +
+  theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+        plot.margin = margin(0, 2, 0, 2, "pt"), plot.title = element_text(size = 8, hjust = 0.5))
+p_v_effect_intercept_no_y <- p_v_effect_intercept + 
+  ggtitle("OD intercept") +
+  theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+        plot.margin = margin(0, 2, 0, 2, "pt"), plot.title = element_text(size = 8, hjust = 0.5))
+p_v_effect_slope_no_y <- p_v_effect_slope + 
+  ggtitle("OD slope") +
+  theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+        plot.margin = margin(0, 0, 0, 2, "pt"), plot.title = element_text(size = 8, hjust = 0.5))
+
+p_combined <- p_intercept_adj | p_intercept_softmax_no_y | p_slope_no_y | p_prop_fold_change_no_y | p_v_effect_intercept_no_y | p_v_effect_slope_no_y
+p_combined <- p_combined + 
+  theme(legend.key.size = unit(0.2, 'cm'))
+
+ggsave("Figure_1.pdf", p_combined, width = 183, height = 183/4, units = "mm")
+```
+
+## Simulation Setup with Realistic Parameters
+
+```{r simulation-params}
+set.seed(123)
+
+# Match sccomp fit: full taxon count (analyses use all taxa that pass abundance filters)
+n_taxa <- n_taxa_real
+n_samples_per_group <- floor(n_samples_real / 2)  # Split into 2 groups
+n_groups <- 2
+n_samples <- n_samples_per_group * n_groups
+group_levels <- c("non-IBD", "IBD")  # Matches simulation output
+
+library_size_mean <- 15125  # From HMP2 average total counts per sample
+library_size_sd <- 5000
+
+cat("=== Simulation Parameters ===\n")
+cat("n_taxa:", n_taxa, "(from fitted model)\n")
+cat("n_samples_per_group:", n_samples_per_group, "\n")
+cat("Total n_samples:", n_samples, "\n")
+
+# Use real baseline distribution - sample from fitted intercepts
+# Scale to n_taxa and center
+set.seed(123)
+sampled_intercepts <- sample(intercept_effects, n_taxa, replace = TRUE)
+mu_inv_softmax_base_realistic <- sampled_intercepts - mean(sampled_intercepts)
+
+cat("\nRealistic baseline (sampled from HMP2 intercepts):\n")
+cat("Range: [", round(min(mu_inv_softmax_base_realistic), 3), ",", 
+    round(max(mu_inv_softmax_base_realistic), 3), "]\n")
+
+# Use real k value for mean-overdispersion association
+k_realistic <- k_real
+
+# Use real intercept dispersion for overdispersion level
+intercept_disp_realistic <- intercept_dispersion_real
+sigma_realistic <- sigma_real
+
+cat("\nRealistic overdispersion parameters:\n")
+cat("k (mean-OD association):", round(k_realistic, 4), "\n")
+cat("intercept_dispersion:", round(intercept_disp_realistic, 4), "\n")
+cat("sigma:", round(sigma_realistic, 6), "\n")
+
+# Create realistic slope vector by directly sampling from the real distribution
+# This captures the natural pattern of group effects observed in HMP2
+set.seed(123)
+slope_realistic <- sample(slope_effects, n_taxa, replace = TRUE)
+# Center to sum to zero (compositional constraint)
+slope_realistic <- slope_realistic - mean(slope_realistic)
+
+# Verify lengths
+stopifnot(length(mu_inv_softmax_base_realistic) == n_taxa)
+stopifnot(length(slope_realistic) == n_taxa)
+
+cat("\nRealistic slope vector (sampled from HMP2 group effects):\n")
+cat("Mean:", round(mean(slope_realistic), 4), "\n")
+cat("SD:", round(sd(slope_realistic), 4), "\n")
+cat("Range: [", round(min(slope_realistic), 3), ",", round(max(slope_realistic), 3), "]\n")
+
+# Sweep parameters
+n_reps_auc <- 20  # Number of replicates
+perm_reps_auc <- 199
+rep_seeds_auc <- 12000 + seq_len(n_reps_auc)
+```
+
+Design matrix helpers are now defined in `_targets.R`.
+
+Helper functions are now defined in `_targets.R`.
+
+```{r simulation-function}
+# Simulation functions for sweeps now live in the targets pipeline (`_targets.R`).
+# Function to create composite plot for DA taxa sweep
+plot_da_taxa_sweep_results <- function(
+  fpr_data,
+  setting_name,
+  sigma_val,
+  intercept_disp_val,
+  x_limits = NULL,
+  x_breaks = NULL
+) {
+  standard_methods_labels <- method_levels
+
+  # Convert raw method keys to pretty labels, then restrict to the 5 standard methods
+  fpr_data_with_labels <- fpr_data %>%
+    dplyr::mutate(method_label = dplyr::case_when(
+      method == "permdisp_bray" ~ "Bray–Curtis",
+      method == "permdisp_aitchison" ~ "Aitchison",
+      method == "permdisp_robust.aitchison" ~ "robust Aitchison",
+      method == "permdisp_robust_aitchison" ~ "robust Aitchison",
+      method == "permdisp_jaccard" ~ "Jaccard",
+      method == "permdisp_hellinger" ~ "Hellinger",
+      as.character(method) %in% standard_methods_labels ~ as.character(method),
+      TRUE ~ NA_character_
+    )) %>%
+    dplyr::filter(!is.na(method_label)) %>%
+    dplyr::mutate(method_label = coerce_method_levels(method_label))
+  
+  # Handle both uppercase FPR and lowercase fpr column names
+  fpr_col <- if ("FPR" %in% names(fpr_data_with_labels)) "FPR" else "fpr"
+  
+  # Add threshold handling if threshold column exists
+  has_threshold <- "threshold" %in% names(fpr_data_with_labels) && 
+                   !all(is.na(fpr_data_with_labels$threshold))
+  
+  if (has_threshold) {
+    fpr_data_with_labels <- fpr_data_with_labels %>%
+      dplyr::mutate(
+        threshold_label = dplyr::case_when(
+          threshold == 0.0 ~ "unfiltered",
+          threshold == 0.005 ~ "0.5%",
+          threshold == 0.001 ~ "0.1%",
+          TRUE ~ as.character(threshold)
+        ),
+        alpha_val = dplyr::case_when(
+          threshold == 0.0 ~ 0.25,
+          threshold == 0.005 ~ 1.0,
+          threshold == 0.001 ~ 0.55,
+          TRUE ~ 1.0
+        )
+      )
+  } else {
+    fpr_data_with_labels$alpha_val <- 1.0
+  }
+  
+  p <- ggplot(fpr_data_with_labels, aes(x = n_da_taxa, y = !!sym(fpr_col), color = method_label, alpha = alpha_val)) +
+    geom_hline(yintercept = 0.05, linetype = "dashed", color = "grey60", linewidth = 0.1) +
+    geom_line(linewidth = 0.1, aes(group = if(has_threshold) interaction(method_label, threshold) else method_label)) +
+    geom_point(size = 1.0, stroke = 0, aes(group = if(has_threshold) interaction(method_label, threshold) else method_label)) +
+    scale_color_manual(values = roc_colors_all, breaks = standard_methods_labels, drop = FALSE, name = NULL) +
+    scale_alpha_identity(guide = "none") +
+    scale_x_continuous(
+      breaks = if (is.null(x_breaks)) unique(fpr_data_with_labels$n_da_taxa) else x_breaks,
+      limits = x_limits,
+      labels = format_axis_labels
+    ) +
+    scale_y_continuous(labels = format_axis_labels, limits = c(0, 1)) +
+    labs(
+      x = "Number of DA taxa",
+      y = "False positive rate"
+    ) +
+    theme_multipanel
+  
+  p
+}
+```
+
+```{r plotting-function}
+# Function to create PCoA plot with facet-grid-like styling
+plot_pcoa_single_method <- function(analysis_result, method_key, n_da_label, 
+                                        is_first_col = FALSE, is_first_row = FALSE, 
+                                        is_last_row = FALSE, is_last_col = FALSE,
+                                        method_label = NULL) {
+  if (is.null(analysis_result) || is.null(analysis_result$bd_by_method)) return(NULL)
+  bd <- analysis_result$bd_by_method[[method_key]]
+  if (is.null(bd)) return(NULL)
+
+  p_val <- analysis_result$stats %>%
+    dplyr::filter(method == method_key) %>%
+    dplyr::pull(p_value)
+  if (length(p_val) == 0) p_val <- NA_real_
+
+  if (is.null(method_label)) {
+    method_label <- pretty_method_label_box(method_key)
+  }
+
+  gg <- plot_betadisper_pcoa_and_boxplot(
+    bd,
+    title_prefix = "",
+    cols = cols_prgn_setting5,
+    p_value = p_val,
+    show_group_legend = FALSE,
+    horizontal_box = FALSE
+  )
+  
+  # Customize PCoA plot
+  p <- gg$pcoa
+  
+  # Add column title (n DA) only on first row
+  if (is_first_row) {
+    p <- p + ggtitle(n_da_label) +
+      theme(plot.title = element_text(size = 8, hjust = 0.5, face = "bold", margin = margin(b = 4)))
+  } else {
+    p <- p + theme(plot.title = element_blank())
+  }
+  
+  # Add method label annotation on the left side (like a facet strip)
+  if (is_first_col) {
+    # Get actual data range from betadisper scores for proper positioning
+    sites_scores <- as.data.frame(vegan::scores(bd, display = "sites"))
+    if (ncol(sites_scores) >= 2) {
+      x_range <- range(sites_scores[[1]], na.rm = TRUE)
+      y_range <- range(sites_scores[[2]], na.rm = TRUE)
+      x_center <- mean(x_range)
+      y_center <- mean(y_range)
+      # Position label to the left of the plot, centered vertically
+      # Use a position that's clearly outside the data range
+      label_x <- x_range[1] - 0.15 * diff(x_range)
+    } else {
+      # Fallback if we can't get scores
+      label_x <- -Inf
+      y_center <- 0
+    }
+    
+    p <- p + 
+      # Add label positioned in left margin area, centered vertically
+      annotate(
+        "text",
+        x = label_x,
+        y = y_center,
+        label = method_label,
+        angle = 90,
+        hjust = 0.5,  # Center horizontally when rotated
+        vjust = 0.5,
+        size = 2.8,
+        fontface = "bold"
+      ) +
+      # Adjust left margin to make room for rotated label
+      theme(plot.margin = margin(l = 55, r = 0, t = 0, b = 0, "pt")) +
+      coord_cartesian(clip = "off")
+  } else {
+    # No margins for non-first columns
+    p <- p + theme(plot.margin = margin(0, 0, 0, 0, "pt"))
+  }
+  
+  # Show y-axis title only on leftmost column
+  if (!is_first_col) {
+    p <- p + theme(axis.title.y = element_blank())
+  }
+  
+  # Show x-axis title only on bottom row
+  if (!is_last_row) {
+    p <- p + theme(axis.title.x = element_blank())
+  }
+  
+  p
+}
+
+# Function to create PCoA grid with facet-grid-like styling
+plot_pcoa_grid_multiple_methods <- function(analysis_list, n_da_labels) {
+  standard_distance_methods_pcoa <- c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
+  methods <- paste0("permdisp_", standard_distance_methods_pcoa)
+  n_methods <- length(methods)
+  n_cols <- length(analysis_list)
+  
+  all_plots <- list()
+  
+  # Iterate by row (method) first, then column (n_da) to match byrow = TRUE layout
+  for (method_idx in seq_along(methods)) {
+    method <- methods[method_idx]
+    method_label <- pretty_method_label_box(method)
+    is_first_row <- (method_idx == 1)
+    is_last_row <- (method_idx == n_methods)
+    
+    for (col_idx in seq_along(analysis_list)) {
+      analysis_result <- analysis_list[[col_idx]]
+      n_da_label <- n_da_labels[col_idx]
+      is_first_col <- (col_idx == 1)
+      is_last_col <- (col_idx == n_cols)
+      
+      p <- plot_pcoa_single_method(
+        analysis_result = analysis_result,
+        method_key = method,
+        n_da_label = n_da_label,
+        is_first_col = is_first_col,
+        is_first_row = is_first_row,
+        is_last_row = is_last_row,
+        is_last_col = is_last_col,
+        method_label = method_label
+      )
+      
+      if (!is.null(p)) {
+        all_plots[[length(all_plots) + 1]] <- p
+      }
+    }
+  }
+  
+  # Arrange in grid: n_methods rows, n_cols columns
+  # byrow = TRUE means fill row by row, which matches our iteration order
+  patchwork::wrap_plots(all_plots, nrow = n_methods, ncol = n_cols, byrow = TRUE) +
+    patchwork::plot_layout(guides = "collect") &
+    theme(legend.position = "bottom")
+}
+```
+
+```{r sweep-selection-helpers}
+get_sweep_index <- function(jobs, seed, n_da_taxa) {
+  idx <- which(jobs$seed == seed & jobs$n_da_taxa == n_da_taxa)
+  if (length(idx) != 1) {
+    stop("Expected exactly one sweep job for seed=", seed, " n_da_taxa=", n_da_taxa)
+  }
+  idx
+}
+
+get_sweep_index_with_threshold <- function(jobs_with_threshold, seed, n_da_taxa, threshold) {
+  idx <- which(jobs_with_threshold$seed == seed & 
+               jobs_with_threshold$n_da_taxa == n_da_taxa & 
+               jobs_with_threshold$threshold == threshold)
+  if (length(idx) != 1) {
+    stop("Expected exactly one sweep job for seed=", seed, " n_da_taxa=", n_da_taxa, " threshold=", threshold)
+  }
+  idx
+}
+```
+
+# Simulation no-DA (No Differential Abundance)
+
+This section tests method performance when there is **differential overdispersion but NO differential abundance**. This evaluates whether methods correctly detect differential dispersion without producing false positives from composition differences.
+
+All simulations in this section use realistic HMP2 parameters (baseline abundances, mean-OD association k ≈ -0.64, realistic library sizes) with `sd_log_overdispersion = 0` (no random variation in overdispersion across taxa). The same simulation case is used throughout, with different filtering applied for different figures.
+
+## Figure 2: Filtered Data (0.1% abundance threshold)
+
+This figure shows method performance on filtered simulated data (taxa with mean abundance <0.1% removed) with differential overdispersion but no differential abundance.
+
+```{r case-4.5-load-params}
+# Load HMP2 parameters for Figure 2 (Setting DO_no_sd)
+# Load the sccomp results
+result_case4_5 <- readRDS("HMP2_sccomp_results.rds")
+
+# Extract fit object
+fit_case4_5 <- attr(result_case4_5, "fit")
+
+# Get basic dataset dimensions from the result
+model_input_case4_5 <- attr(result_case4_5, "model_input")
+
+# Extract N (samples) and M (taxa/cell groups) from model_input list
+if (!is.null(model_input_case4_5) && is.list(model_input_case4_5)) {
+  n_samples_real_case4_5 <- model_input_case4_5$N
+  n_taxa_real_case4_5 <- model_input_case4_5$M
+} else {
+  # Fallback: use the cell_group column in result (unique taxa)
+  n_taxa_real_case4_5 <- length(unique(result_case4_5$cell_group))
+  n_samples_real_case4_5 <- 178
+}
+
+# Extract baseline abundance distribution (intercept effects for composition)
+intercept_param_case4_5 <- if (any(result_case4_5$parameter == "(Intercept)", na.rm = TRUE)) {
+  "(Intercept)"
+} else {
+  "Intercept"
+}
+intercept_effects_case4_5 <- result_case4_5 %>%
+  filter(parameter == intercept_param_case4_5) %>%
+  pull(c_effect)
+
+# Extract mean-overdispersion association coefficient (k)
+prec_coeff_summary_case4_5 <- fit_case4_5$summary("prec_coeff")
+prec_slope_case4_5 <- prec_coeff_summary_case4_5$mean[2]  # ≈ -0.64
+k_realistic_case4_5 <- prec_slope_case4_5  # k = prec_slope for simulator
+
+rm(result_case4_5)
+gc()
+```
+
+```{r figure-2-setup}
+# Figure 2 is about DO (differential overdispersion), not DA
+# Row 1 uses delta DO = 0.5 from Setting DO_no_sd
+# Load required targets
+sweep_setting_DO_no_sd_jobs <- targets::tar_read("sweep_setting_DO_no_sd_jobs")
+
+# Allow running this chunk standalone in IDE sessions where setup may be skipped.
+if (!exists("simulate_case_realistic_taxa")) {
+  targets_script_local <- file.path(getwd(), "_targets.R")
+  if (!file.exists(targets_script_local)) {
+    qmd_dir_local <- dirname(knitr::current_input(dir = TRUE))
+    targets_script_local <- file.path(qmd_dir_local, "_targets.R")
+  }
+  source(targets_script_local)
+}
+
+# Recreate the simulation for delta = 0.5 (matching the DO_no_sd sweep)
+# This matches the simulation used in the DO_no_sd sweep
+# 
+# IMPORTANT: intercept_dispersion is the intercept 'c' in log(σ) = -k·log(μ) + c
+# - Higher intercept_dispersion → Higher log(σ) → Higher σ → MORE overdispersion
+# - Lower intercept_dispersion → Lower log(σ) → Lower σ → LESS overdispersion
+# 
+# For differential overdispersion (IBD > non-IBD):
+# - non-IBD: intercept_dispersion = intercept_base (e.g., -6)
+# - IBD: intercept_dispersion = intercept_base + delta (e.g., -5.5)
+# - Since -5.5 > -6, IBD has HIGHER σ and MORE overdispersion ✓
+#
+# Note: This is NOT precision! Precision ≈ 1/σ, so higher σ = lower precision.
+target_delta <- 0.5
+intercept_base <- -6
+intercept_disp_cohort <- c(intercept_base, intercept_base + target_delta)
+intercept_disp_matrix <- outer(intercept_disp_cohort, rep(1, sim_params$n_taxa))
+base_seed <- unique(sweep_setting_DO_no_sd_jobs$seed)[1]
+
+source("_targets.R")
+
+sim_realistic_taxa <- simulate_case_realistic_taxa(
+  slope_vector = rep(0, sim_params$n_taxa),  # No DA
+  mu_inv_softmax = sim_params$mu_inv_softmax_base_realistic,
+  log_dispersion_assoc = sccomp_params$k_real,
+  intercept_dispersion_matrix = intercept_disp_matrix,
+  sd_log_overdispersion = 0,
+  seed = base_seed,
+  n_taxa = sim_params$n_taxa,
+  n_samples_per_group = sim_params$n_samples_per_group,
+  library_size_mean = sim_params$library_size_mean,
+  library_size_sd = sim_params$library_size_sd
+)
+sim_realistic_taxa <- annotate_hmp2_sim_groups(sim_realistic_taxa)
+
+# Filter and run analysis to get full results for plotting
+# Use 0.1% threshold for Figure 2 (as stated in the text)
+threshold_fig2 <- 0.001  # 0.1% threshold for Figure 2
+sim_realistic_taxa_filtered <- sim_realistic_taxa
+sim_realistic_taxa_filtered$count_long <- filter_by_abundance_cases(
+  sim_realistic_taxa$count_long, 
+  threshold = threshold_fig2
+)
+
+# Check that we have enough samples and taxa after filtering
+n_samples_after <- length(unique(sim_realistic_taxa_filtered$count_long$sample_id))
+n_taxa_after <- length(unique(sim_realistic_taxa_filtered$count_long$taxon_id))
+samples_by_group <- sim_realistic_taxa_filtered$count_long %>%
+  dplyr::distinct(sample_id, group) %>%
+  dplyr::count(group)
+cat("After filtering (threshold =", threshold_fig2, "):\n")
+cat("  Samples:", n_samples_after, "\n")
+cat("  Taxa:", n_taxa_after, "\n")
+cat("  Samples by group:\n")
+print(samples_by_group)
+
+if (n_samples_after < 2) {
+  stop("Not enough samples after filtering (need at least 2, got ", n_samples_after, ")")
+}
+if (n_taxa_after < 3) {
+  stop("Not enough taxa after filtering (need at least 3, got ", n_taxa_after, ")")
+}
+if (nrow(samples_by_group) < 2 || any(samples_by_group$n < 1)) {
+  stop("Not all groups have samples after filtering")
+}
+
+# Run analysis to get full results for plotting
+analysis_realistic_taxa_filtered <- run_analysis_job(
+  sim_r = sim_realistic_taxa_filtered,
+  return_full = TRUE
+)
+```
+
+```{r figure-2-filtered-comparison}
+# sim_realistic_taxa_filtered is already created in figure-2-setup chunk
+# Just verify it exists and get statistics
+
+n_taxa_before_filter_realistic_taxa <- length(unique(sim_realistic_taxa$count_long$taxon_id))
+cat("=== Figure 2 Filtering Statistics ===\n")
+cat("Number of taxa BEFORE filtering:", n_taxa_before_filter_realistic_taxa, "\n")
+
+n_taxa_after_filter_realistic_taxa <- length(unique(sim_realistic_taxa_filtered$count_long$taxon_id))
+cat("Number of taxa AFTER 0.1% filtering:", n_taxa_after_filter_realistic_taxa, "\n")
+cat("Percentage retained:", round(100 * n_taxa_after_filter_realistic_taxa / n_taxa_before_filter_realistic_taxa, 1), "%\n")
+cat("=====================================\n\n")
+
+# Store for later use
+cat("\n**Figure 2 Filtering Summary:**\n")
+cat("- Before filtering:", n_taxa_before_filter_realistic_taxa, "taxa\n")
+cat("- After 0.1% filtering:", n_taxa_after_filter_realistic_taxa, "taxa\n")
+cat("- Percentage retained:", round(100 * n_taxa_after_filter_realistic_taxa / n_taxa_before_filter_realistic_taxa, 1), "%\n")
+
+# Display filtering statistics
+cat("\n")
+cat("**Figure 2 Filtering Statistics:**\n")
+cat("- Number of taxa BEFORE filtering:", n_taxa_before_filter_realistic_taxa, "\n")
+cat("- Number of taxa AFTER 0.1% filtering:", n_taxa_after_filter_realistic_taxa, "\n")
+cat("- Percentage retained:", round(100 * n_taxa_after_filter_realistic_taxa / n_taxa_before_filter_realistic_taxa, 1), "%\n")
+cat("\n")
+
+# Format analysis results for plotting (already filtered in the simulation)
+cmp_realistic_taxa_filtered <- format_analysis_results_for_plotting(
+  analysis_results = analysis_realistic_taxa_filtered,
+  case_label = "Setting DO_no_sd (filtered, delta = 0.5)"
+)
+```
+
+```{r figure-2-DO-sweep-data}
+# Load Setting DO_no_sd FPR data for FNR/centroid plots
+sweep_setting_DO_no_sd_fpr <- targets::tar_read("sweep_setting_DO_no_sd_fpr")
+```
+
+
+```{r fig-2-components}
+# Figure 2 components (Setting DO_no_sd filtered)
+cols_prgn <- c(
+  "non-IBD" = RColorBrewer::brewer.pal(11, "PRGn")[10], # green
+  "IBD" = RColorBrewer::brewer.pal(11, "PRGn")[2]   # purple
+)
+
+p_std_realistic_taxa_filtered <- cmp_realistic_taxa_filtered$stats %>% dplyr::filter(method == "permdisp_bray") %>% dplyr::pull(p_value)
+se_std_realistic_taxa_filtered <- cmp_realistic_taxa_filtered$stats %>% dplyr::filter(method == "permdisp_bray") %>% dplyr::pull(p_se)
+n_std_realistic_taxa_filtered <- cmp_realistic_taxa_filtered$stats %>% dplyr::filter(method == "permdisp_bray") %>% dplyr::pull(n_perm)
+
+std_gg_realistic_taxa_filtered <- plot_betadisper_pcoa_and_boxplot(
+  cmp_realistic_taxa_filtered$bd$standard,
+  "PERMDISP (Bray–Curtis)",
+  cols = cols_prgn,
+  p_value = p_std_realistic_taxa_filtered,
+  p_se = se_std_realistic_taxa_filtered,
+  n_perm = n_std_realistic_taxa_filtered,
+  show_group_legend = TRUE,
+  horizontal_box = TRUE
+)
+# Use delta = 2 simulation for alpha plot in PCoA grid
+alpha_plot_realistic_taxa_filtered <- plot_alpha_diversity_scatter(sim_realistic_taxa_filtered, case_label = "Setting DO_no_sd (filtered)") +
+  ggplot2::scale_color_manual(values = cols_prgn, guide = "none") +
+  ggplot2::scale_fill_manual(values = cols_prgn, guide = "none")
+
+disp_scatter_realistic_taxa_filtered <- plot_mean_dispersion_scatter(sim_realistic_taxa_filtered, case_label = "Setting DO_no_sd (filtered)", cols = cols_prgn)
+
+# Filter distances for non-IBD methods
+distances_non_ibd_realistic_taxa_filtered <- cmp_realistic_taxa_filtered$distances_long %>%
+  dplyr::mutate(method_char = as.character(method)) %>%
+  dplyr::filter(!startsWith(method_char, "ibd")) %>%
+  dplyr::mutate(method_label = sapply(method_char, pretty_method_label_box)) %>%
+  dplyr::mutate(method_group = dplyr::case_when(
+    method_label %in% c("Aitchison", "robust Aitchison") ~ "Aitchison methods",
+    TRUE ~ "Other methods"
+  ))
+
+# Create boxplot panel for all methods (excluding IBD) with facets
+p_boxplots_all_realistic_taxa_filtered <- ggplot(distances_non_ibd_realistic_taxa_filtered, aes(x = method_label, y = distance, fill = group)) +
+  geom_boxplot(width = 0.5, outlier.size = 0.1, alpha = 0.85, linewidth = 0.25, outlier.stroke = 0, position = position_dodge(width = 0.8)) +
+  geom_jitter(size = 1.0, alpha = 0.25, stroke = 0, position = position_jitterdodge(dodge.width = 0.8, jitter.width = 0.12)) +
+  scale_fill_manual(values = cols_prgn, labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"), name = NULL) +
+  facet_wrap(~ method_group, nrow = 1, scales = "free", space = "free_x") +
+  labs(x = NULL, y = "Distance to centroid") +
+  theme_multipanel +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 6),
+  )
+
+# Create PCoA plots for all methods (excluding IBD) using delta = 2 simulation (original)
+# Diagnostic: Verify the actual delta value in the simulation and centroid distances
+# Extract parameters from simulation
+intercept_dispersion_realistic_taxa <- unique(sim_realistic_taxa$cohort_log_sigma)
+sd_log_overdispersion_realistic_taxa <- if("sd_log_overdispersion" %in% names(sim_realistic_taxa$parameters)) sim_realistic_taxa$parameters$sd_log_overdispersion else 0
+slope_vector_realistic_taxa <- sim_realistic_taxa$slope_vector
+
+cat("\n=== Figure 2 Row 1: Simulation Parameters ===\n")
+cat("Simulation source: Setting DO_no_sd with delta = 0.5\n")
+cat("Simulation parameters:\n")
+cat("  intercept_dispersion (log) - non-IBD:", round(intercept_dispersion_realistic_taxa[1], 4), "\n")
+cat("  intercept_dispersion (log) - IBD:", round(intercept_dispersion_realistic_taxa[2], 4), "\n")
+delta_od <- intercept_dispersion_realistic_taxa[2] - intercept_dispersion_realistic_taxa[1]
+cat("  Differential overdispersion (delta, log):", round(delta_od, 4), "\n")
+cat("  Differential overdispersion (delta, linear scale, fold change):", round(exp(delta_od), 4), "x\n")
+cat("  sd_log_overdispersion:", sd_log_overdispersion_realistic_taxa, "\n")
+cat("  slope_vector (DA):", if(all(slope_vector_realistic_taxa == 0)) "all zeros (no DA)" else "has non-zero values", "\n")
+cat("\n*** SUMMARY: Figure 2 Row 1 uses delta OD =", round(delta_od, 4), "on log (", round(exp(delta_od), 2), "x fold change) ***\n")
+cat("*** Expected: delta OD = 0.5 (non-IBD: -6, IBD: -5.5) ***\n")
+
+# Check all methods for centroid distances
+cat("\nCentroid distances across all methods:\n")
+for (method_key in names(cmp_realistic_taxa_filtered$bd_by_method)) {
+  if (startsWith(method_key, "ibd")) next
+  bd_check <- cmp_realistic_taxa_filtered$bd_by_method[[method_key]]
+  if (is.null(bd_check)) next
+  
+  group_dists <- bd_check$group.distances
+  centroids <- bd_check$centroids
+  
+  method_label <- pretty_method_label_box(method_key)
+  cat("\n", method_label, ":\n", sep = "")
+  cat("  non-IBD mean distance to centroid:", round(group_dists[1], 6), "\n")
+  cat("  IBD mean distance to centroid:", round(group_dists[2], 6), "\n")
+  cat("  Difference (dispersion delta):", round(group_dists[2] - group_dists[1], 6), "\n")
+  
+  if (nrow(centroids) == 2 && ncol(centroids) >= 2) {
+    # Distance in first 2 PCoA dimensions (what's shown in the plot)
+    centroid_dist_pcoa12 <- sqrt(sum((centroids[1, 1:2] - centroids[2, 1:2])^2))
+    hull_scale <- compute_centroid_distance_pct_hull_radius(bd_check)
+    # Distance in all dimensions
+    centroid_dist_all <- sqrt(sum((centroids[1,] - centroids[2,])^2))
+    
+    # Get eigenvalues to see variance explained
+    eig <- bd_check$eig
+    eig_pct <- if (!is.null(eig) && length(eig) > 0) {
+      round(100 * eig[1:min(5, length(eig))] / sum(eig[eig > 0]), 2)
+    } else NULL
+    
+    cat("  Centroid positions (PCoA 1-2):\n")
+    cat("    non-IBD:", paste(round(centroids[1, 1:2], 6), collapse = ", "), "\n")
+    cat("    IBD:", paste(round(centroids[2, 1:2], 6), collapse = ", "), "\n")
+    cat("  Distance between centroids (PCoA 1-2):", round(centroid_dist_pcoa12, 8), "\n")
+    cat(
+      "  Centroid distance as % of mean hull radius:",
+      round(hull_scale$pct_of_mean_hull_radius, 2), "%\n"
+    )
+    cat("  Distance between centroids (all dims):", round(centroid_dist_all, 8), "\n")
+    if (!is.null(eig_pct)) {
+      cat("  Variance explained (first 5 dims):", paste(paste0(round(eig_pct, 1), "%"), collapse = ", "), "\n")
+    }
+    
+    # Check if distance is in higher dimensions
+    if (ncol(centroids) > 2) {
+      dist_by_dim <- sapply(1:min(10, ncol(centroids)), function(i) {
+        abs(centroids[1, i] - centroids[2, i])
+      })
+      cat("  Centroid separation by dimension (first 10):", paste(round(dist_by_dim, 6), collapse = ", "), "\n")
+    }
+  }
+} 
+cat("\n=== End diagnostic ===\n\n")
+
+non_ibd_methods_realistic_taxa_filtered <- names(cmp_realistic_taxa_filtered$bd_by_method)[!startsWith(names(cmp_realistic_taxa_filtered$bd_by_method), "ibd")]
+
+pcoa_plots_all_realistic_taxa_filtered <- purrr::imap(non_ibd_methods_realistic_taxa_filtered, function(method_key, idx) {
+  bd <- cmp_realistic_taxa_filtered$bd_by_method[[method_key]]
+  
+  method_label <- pretty_method_label_box(method_key)
+  p_val <- cmp_realistic_taxa_filtered$stats %>% 
+    dplyr::filter(method == method_key) %>% 
+    dplyr::pull(p_value)
+  
+  gg <- plot_betadisper_pcoa_and_boxplot(
+    bd,
+    title_prefix = method_label,
+    cols = cols_prgn,
+    p_value = p_val,
+    show_group_legend = FALSE,
+    horizontal_box = FALSE
+  )
+  
+  gg$pcoa <- gg$pcoa + 
+    ggtitle(method_label) +
+    theme(
+      plot.title = element_text(size = 7, hjust = 0.5, margin = margin(b = 2))
+    )
+  
+  if (idx > 1) {
+    gg$pcoa <- gg$pcoa + theme(axis.title.y = element_blank())
+  }
+  gg$pcoa
+})
+
+# Create PCoA grid with 5 PCoA plots + 1 spacer (2x3 grid)
+if (length(pcoa_plots_all_realistic_taxa_filtered) > 0) {
+  # Combine PCoA plots with spacer
+  all_plots_realistic_taxa_filtered <- c(pcoa_plots_all_realistic_taxa_filtered, list(plot_spacer()))
+  p_pcoa_all_realistic_taxa_filtered <- patchwork::wrap_plots(all_plots_realistic_taxa_filtered, nrow = 2, ncol = 3) + patchwork::plot_layout(guides = "collect") &
+    theme(legend.position = "bottom")
+} else {
+  p_pcoa_all_realistic_taxa_filtered <- ggplot() + theme_void()
+}
+
+# Calculate False Negative Rate (FNR) for each delta, method, and threshold
+# Note: sweep_setting_DO_no_sd_fpr is already loaded in figure-2-DO-sweep-data chunk
+fnr_sweep_realistic_taxa_filtered <- sweep_setting_DO_no_sd_fpr %>%
+  dplyr::filter(!grepl("^IBD", method, ignore.case = TRUE)) %>%
+  dplyr::group_by(delta, method, threshold) %>%
+  dplyr::summarise(
+    n_sims = dplyr::n(),
+    n_fn = sum(p_value > 0.05),
+    FNR = n_fn / n_sims,
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    method = coerce_method_levels(method),
+    threshold_label = dplyr::case_when(
+      threshold == 0.0 ~ "unfiltered",
+      threshold == 0.005 ~ "0.5%",
+      threshold == 0.001 ~ "0.1%",
+      TRUE ~ as.character(threshold)
+    ),
+    alpha_val = dplyr::case_when(
+      threshold == 0.005 ~ 1.0,
+      threshold == 0.001 ~ 0.55,
+      threshold == 0.0 ~ 0.25,
+      TRUE ~ 1.0
+    )
+  )
+
+p_sweep_fnr_realistic_taxa_filtered <- ggplot(fnr_sweep_realistic_taxa_filtered, aes(x = delta, y = FNR, color = method, alpha = alpha_val)) +
+  geom_line(linewidth = 0.1, aes(group = interaction(method, threshold))) +
+  geom_point(size = 1.0, stroke = 0, aes(group = interaction(method, threshold))) +
+  scale_color_manual(values = roc_colors_all, breaks = method_levels, drop = FALSE, name = NULL) +
+  scale_alpha_identity(guide = "none") +
+  scale_x_continuous(breaks = {
+    breaks <- unique(fnr_sweep_realistic_taxa_filtered$delta)
+    breaks[breaks == 0 | breaks >= 0.25]
+  }, labels = format_axis_labels) +
+  scale_y_continuous(labels = format_axis_labels, limits = c(0, 1)) +
+  labs(
+    x = "Differential dispersion (log)",
+    y = "False negative rate"
+  ) +
+  theme_multipanel
+
+# Calculate centroid separation as % of average hull radius for each delta, method, and threshold
+centroid_sweep_realistic_taxa_filtered_raw <- sweep_setting_DO_no_sd_fpr %>%
+  dplyr::filter(!grepl("^IBD", method, ignore.case = TRUE)) %>%
+  dplyr::group_by(delta, method, threshold) %>%
+  dplyr::summarise(
+    n_sims = dplyr::n(),
+    mean_centroid_pct = mean(centroid_sep_pct_hull_radius, na.rm = TRUE),
+    se_centroid_pct = sd(centroid_sep_pct_hull_radius, na.rm = TRUE) / sqrt(dplyr::n()),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    method = coerce_method_levels(method),
+    threshold_label = dplyr::case_when(
+      threshold == 0.0 ~ "unfiltered",
+      threshold == 0.005 ~ "0.5%",
+      threshold == 0.001 ~ "0.1%",
+      TRUE ~ as.character(threshold)
+    ),
+    alpha_val = dplyr::case_when(
+      threshold == 0.005 ~ 1.0,
+      threshold == 0.001 ~ 0.55,
+      threshold == 0.0 ~ 0.25,
+      TRUE ~ 1.0
+    )
+  )
+
+centroid_sweep_realistic_taxa_filtered <- centroid_sweep_realistic_taxa_filtered_raw
+
+# Mixed-effects association model:
+# centroid shift (%) ~ differential dispersion (delta)
+# with random intercept and slope per method-threshold combination.
+lmm_data_fig2 <- sweep_setting_DO_no_sd_fpr %>%
+  dplyr::filter(!grepl("^IBD", method, ignore.case = TRUE)) %>%
+  dplyr::filter(is.finite(centroid_sep_pct_hull_radius)) %>%
+  dplyr::mutate(
+    method_threshold = interaction(method, threshold, drop = TRUE)
+  )
+
+lmm_full_fig2 <- lme4::lmer(
+  centroid_sep_pct_hull_radius ~ delta + (1 + delta | method_threshold),
+  data = lmm_data_fig2,
+  REML = FALSE
+)
+lmm_null_fig2 <- lme4::lmer(
+  centroid_sep_pct_hull_radius ~ 1 + (1 + delta | method_threshold),
+  data = lmm_data_fig2,
+  REML = FALSE
+)
+
+lmm_lrt_fig2 <- stats::anova(lmm_null_fig2, lmm_full_fig2)
+lmm_p_delta_fig2 <- lmm_lrt_fig2$`Pr(>Chisq)`[2]
+lmm_fixef_fig2 <- lme4::fixef(lmm_full_fig2)
+lmm_intercept_fig2 <- unname(lmm_fixef_fig2["(Intercept)"])
+lmm_slope_fig2 <- unname(lmm_fixef_fig2["delta"])
+
+fmt_p_lmm <- function(p) {
+  if (!is.finite(p)) return("NA")
+  if (p < 0.001) return("<0.001")
+  sprintf("%.3f", p)
+}
+lmm_label_fig2 <- paste0("p = ", fmt_p_lmm(lmm_p_delta_fig2))
+
+p_sweep_realistic_taxa_filtered <- ggplot(centroid_sweep_realistic_taxa_filtered, aes(x = delta, y = mean_centroid_pct, color = method, alpha = alpha_val)) +
+  geom_ribbon(aes(ymin = mean_centroid_pct - se_centroid_pct, 
+                  ymax = mean_centroid_pct + se_centroid_pct, fill = method, group = interaction(method, threshold)), 
+              alpha = 0.2, color = NA) +
+  geom_line(linewidth = 0.1, aes(group = interaction(method, threshold))) +
+  geom_point(size = 1.0, stroke = 0, aes(group = interaction(method, threshold))) +
+  geom_abline(
+    intercept = lmm_intercept_fig2,
+    slope = lmm_slope_fig2,
+    color = "black",
+    linewidth = 0.1,
+    linetype = "dotted"
+  ) +
+  annotate(
+    geom = "text",
+    x = 0.1,
+    y = 18,
+    label = lmm_label_fig2,
+    hjust = 0,
+    vjust = 1,
+    size = 2.6,
+    fontface = "plain",
+    color = "black"
+  ) +
+  scale_color_manual(values = roc_colors_all, breaks = method_levels, drop = FALSE, name = NULL) +
+  scale_fill_manual(values = roc_colors_all, breaks = method_levels, drop = FALSE, guide = "none") +
+  scale_alpha_identity(guide = "none") +
+  scale_x_continuous(breaks = {
+    breaks <- unique(centroid_sweep_realistic_taxa_filtered$delta)
+    breaks[breaks == 0 | breaks >= 0.25]
+  }, labels = format_axis_labels) +
+  scale_y_continuous(labels = format_axis_labels, limits = c(0, NA)) +
+  labs(
+    x = "Differential dispersion (log)",
+    y = "Centroid shift (% of mean hull radius)"
+  ) +
+  coord_cartesian(clip = "off") +
+  theme_multipanel +
+  theme(
+    panel.grid.major.y = element_line(linewidth = 0.1, color = "grey90"),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.major.x = element_blank()
+  )
+
+# Get top 30 most abundant taxa for whisker plot (Figure 2, Setting DO_no_sd filtered)
+# Use the ORIGINAL sim_realistic_taxa (before filtering) to identify top 30 taxa, then filter those
+# This ensures we get the top 30 from the full dataset, not just what remains after 0.1% filtering
+taxon_abundance_realistic_taxa_original <- sim_realistic_taxa$count_long %>%
+  dplyr::mutate(proportion = count / library_size) %>%
+  dplyr::group_by(taxon_id) %>%
+  dplyr::summarise(mean_prop = mean(proportion, na.rm = TRUE), .groups = "drop") %>%
+  dplyr::arrange(dplyr::desc(mean_prop)) %>%
+  dplyr::slice_head(n = 30) %>%
+  dplyr::pull(taxon_id)
+
+# Check how many of the top 30 remain after filtering
+top30_after_filter <- sum(taxon_abundance_realistic_taxa_original %in% unique(sim_realistic_taxa_filtered$count_long$taxon_id))
+
+cat("\n**Whisker Plot Taxa Selection:**\n")
+cat("- Top 30 taxa selected from original", n_taxa_before_filter_realistic_taxa, "taxa\n")
+cat("- Top 30 taxa remaining after 0.1% filter:", top30_after_filter, "out of 30\n")
+cat("- Taxa shown in whisker plot:", top30_after_filter, "\n")
+cat("\n")
+
+# Create filtered simulation with only top 30 taxa for whisker plot
+# Use the top 30 from original, but show data from filtered simulation
+sim_realistic_taxa_filtered_top30 <- sim_realistic_taxa_filtered
+sim_realistic_taxa_filtered_top30$count_long <- sim_realistic_taxa_filtered$count_long %>%
+  dplyr::filter(taxon_id %in% taxon_abundance_realistic_taxa_original)
+
+# Display filtering statistics
+cat("\n**Case 4.5 Filtering Statistics:**\n")
+cat("- Number of taxa BEFORE filtering:", n_taxa_before_filter_realistic_taxa, "\n")
+cat("- Number of taxa AFTER 0.1% filtering:", n_taxa_after_filter_realistic_taxa, "\n")
+cat("- Percentage retained:", round(100 * n_taxa_after_filter_realistic_taxa / n_taxa_before_filter_realistic_taxa, 1), "%\n")
+cat("- Top 30 taxa remaining after filter:", top30_after_filter, "out of 30\n")
+cat("- Taxa shown in whisker plot:", top30_after_filter, "\n")
+cat("\n")
+
+# Create whisker plot for top 20 most abundant filtered taxa
+arcsin_sqrt_trans_realistic_taxa <- scales::trans_new(
+  name = "arcsin_sqrt",
+  transform = function(x) asin(sqrt(pmax(0, pmin(1, x)))),
+  inverse = function(y) sin(y)^2,
+  breaks = scales::extended_breaks(),
+  domain = c(0, 1)
+)
+
+d_whisker_realistic_taxa_all <- sim_realistic_taxa_filtered$count_long %>%
+  dplyr::filter(taxon_id %in% taxon_abundance_realistic_taxa_original) %>%
+  dplyr::mutate(proportion = count / library_size) %>%
+  dplyr::group_by(group, taxon_id) %>%
+    dplyr::summarise(
+    mean_prop = mean(proportion, na.rm = TRUE),
+    p_low = stats::quantile(proportion, 0.025, na.rm = TRUE),
+    p_high = stats::quantile(proportion, 0.975, na.rm = TRUE),
+      .groups = "drop"
+  )
+
+taxon_order_whisker_realistic_taxa_all <- d_whisker_realistic_taxa_all %>%
+  dplyr::group_by(taxon_id) %>%
+  dplyr::summarise(overall_mean = mean(mean_prop, na.rm = TRUE), .groups = "drop") %>%
+  dplyr::arrange(dplyr::desc(overall_mean)) %>%
+  dplyr::pull(taxon_id)
+
+d_whisker_realistic_taxa_all <- d_whisker_realistic_taxa_all %>%
+  dplyr::mutate(taxon_id = factor(taxon_id, levels = taxon_order_whisker_realistic_taxa_all))
+
+prop_breaks_whisker_realistic_taxa_all <- c(0.001, 0.01, 0.05, 0.1, 0.2, 0.3, 0.5)
+prop_breaks_whisker_realistic_taxa_all <- prop_breaks_whisker_realistic_taxa_all[prop_breaks_whisker_realistic_taxa_all <= max(d_whisker_realistic_taxa_all$p_high, na.rm = TRUE) * 1.1]
+
+p_whisker_realistic_taxa_filtered_all <- ggplot(d_whisker_realistic_taxa_all, aes(x = taxon_id, y = mean_prop, ymin = p_low, ymax = p_high, color = group)) +
+  ggplot2::geom_linerange(position = ggplot2::position_dodge(width = 0.6), linewidth = 0.5, alpha = 0.8) +
+  ggplot2::geom_point(position = ggplot2::position_dodge(width = 0.6), size = 1.0, stroke = 0) +
+  ggplot2::scale_color_manual(values = cols_prgn, name = NULL) +
+  ggplot2::scale_y_continuous(
+    trans = arcsin_sqrt_trans_realistic_taxa,
+    breaks = prop_breaks_whisker_realistic_taxa_all,
+    labels = function(x) gsub("\\.0%", "%", scales::percent_format(accuracy = 0.1)(x))
+  ) +
+  ggplot2::labs(
+    x = "Taxon (ordered by mean proportion)",
+    y = "Proportion (arcsin-sqrt scale, 95% CI)"
+  ) +
+  theme_multipanel +
+  ggplot2::theme(
+    axis.text.x = ggplot2::element_blank(),
+    axis.ticks.x = ggplot2::element_blank(),
+    legend.position = "bottom"
+  )
+
+# Second row: PCoA grid on left, sweep plots on right (whisker plot moved to first row)
+fig_2_case4_5 <- (p_pcoa_all_realistic_taxa_filtered | (p_sweep_fnr_realistic_taxa_filtered / p_sweep_realistic_taxa_filtered) + patchwork::plot_layout(heights = c(1, 1))) + 
+  patchwork::plot_layout(guides = "collect", widths = c(1, 1)) &
+  theme(plot.margin = margin(0, 0, 0, 0, "pt"), legend.key.size = unit(0.2, 'cm'), legend.position = "bottom")
+```
+
+```{r fig-2-combined-filtered, fig.width=16, fig.height=14}
+#| fig-cap: "Setting DO_no_sd (filtered): Differential overdispersion with no differential abundance, with abundance filtering. Realistic number of taxa, no random variation in overdispersion (0.1% threshold)."
+
+# First row: whisker plot (all filtered taxa) | alpha diversity | boxplot
+fig_2_row1_new <- (p_whisker_realistic_taxa_filtered_all | alpha_plot_realistic_taxa_filtered | p_boxplots_all_realistic_taxa_filtered) + 
+  patchwork::plot_layout(widths = c(0.35, 0.325, 0.325), guides = "collect") &
+  theme(plot.margin = margin(0, 0, 0, 0, "pt"), legend.key.size = unit(0.2, 'cm'), legend.position = "bottom")
+
+# Combine rows: Row 1 (spacer | whisker | alpha), Row 2 (sweep plots | PCoA grid)
+fig_2 <- (fig_2_row1_new / fig_2_case4_5) + 
+  patchwork::plot_layout(guides = "collect", heights = c(1, 2)) &
+  theme(plot.margin = margin(0, 0, 0, 0, "pt"), legend.key.size = unit(0.2, 'cm'), legend.position = "bottom")
+
+fig_2
+
+ggsave("Figure_2.pdf", fig_2, width = 183, height = 138, units = "mm")
+```
+
+```{r cleanup-after-figure-2}
+# Release heavy Figure 2 objects before next sections
+rm(list = intersect(
+  c(
+    "sim_realistic_taxa", "sim_realistic_taxa_filtered", "analysis_realistic_taxa_filtered",
+    "cmp_realistic_taxa_filtered", "std_gg_realistic_taxa_filtered",
+    "p_pcoa_all_realistic_taxa_filtered", "p_boxplots_all_realistic_taxa_filtered",
+    "alpha_plot_realistic_taxa_filtered", "disp_scatter_realistic_taxa_filtered",
+    "p_whisker_realistic_taxa_filtered_all", "fig_2_case4_5", "fig_2_row1_new", "fig_2",
+    "distances_non_ibd_realistic_taxa_filtered", "d_whisker_realistic_taxa_all",
+    "taxon_abundance_realistic_taxa_original", "sim_realistic_taxa_filtered_top30",
+    "centroid_sweep_realistic_taxa_filtered", "centroid_sweep_realistic_taxa_filtered_raw",
+    "p_sweep_fnr_realistic_taxa_filtered", "p_sweep_realistic_taxa_filtered"
+  ),
+  ls()
+))
+invisible(gc())
+```
+
+# Simulation no-DO (No Differential Overdispersion)
+
+This section tests method performance when there is **differential abundance but NO differential overdispersion**. This evaluates whether methods produce false positives from composition differences when there is no true differential dispersion.
+
+## Figure 3: Setting DA_no_sd (filtered) and Setting DA_sd (filtered)
+
+This figure shows method performance on filtered simulated data (taxa with mean abundance <0.1% removed) with differential abundance but no differential overdispersion.
+
+```{r shared-setting-params}
+# Parameters for Setting DA_no_sd
+intercept_disp_DA_no_sd <- intercept_disp_realistic
+sigma_DA_no_sd <- sigma_realistic
+mu_base_DA_no_sd <- mu_inv_softmax_base_realistic
+k_fixed_DA_no_sd <- 0
+
+# Parameters for Setting DA_sd
+intercept_disp_DA_sd <- intercept_disp_realistic
+sigma_DA_sd <- sigma_realistic
+mu_base_DA_sd <- mu_inv_softmax_base_realistic
+k_fixed_DA_sd <- 0
+
+standard_distance_methods_setting5 <- c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
+group_levels <- c("non-IBD", "IBD")
+
+cols_prgn_setting5 <- c(
+  "non-IBD" = RColorBrewer::brewer.pal(11, "PRGn")[10],
+  "IBD" = RColorBrewer::brewer.pal(11, "PRGn")[2]
+)
+
+filter_by_abundance_for_plot <- function(count_long, min_abundance) {
+  taxon_means <- count_long %>%
+    dplyr::mutate(proportion = count / library_size) %>%
+    dplyr::group_by(taxon_id) %>%
+    dplyr::summarise(mean_prop = mean(proportion, na.rm = TRUE), .groups = "drop")
+  keep_taxa <- taxon_means %>% dplyr::filter(mean_prop >= min_abundance) %>% dplyr::pull(taxon_id)
+  count_long %>% dplyr::filter(taxon_id %in% keep_taxa)
+}
+```
+
+### Setting DA_no_sd (filtered): Differential abundance, no sd on overdispersion, with abundance filtering (<0.1%)
+
+This setting uses the same simulated data as Setting DA_no_sd but filters out taxa with mean abundance <0.1% before computing distances and running PERMDISP. This tests whether the trends observed in Setting DA_no_sd are driven by low abundance taxa.
+
+**Note:** A 0.1% mean abundance threshold is more appropriate than 5% for microbiome data, as 5% would remove most taxa. PERMDISP requires at least 3 taxa to function, but more taxa are preferable for stable results.
+
+```{r figure-3-seed-selection}
+# Seed selection for Figure 3 (PCoA plots and top row)
+# Change seed_idx to try different seeds and find a more representative example
+seed_idx_fig3 <- 1
+```
+
+```{r setting-DA-no-sd-filtered-pcoa-plots}
+# Create PCoA panel for Setting DA_no_sd (filtered) using sweep analysis outputs
+# Use threshold = 0.001 (0.1%) for filtered plots
+# Branch strategy: `tar_read(..., branches = i)` loads one pattern branch only (not the
+# full `sweep_setting_DA_no_sd_res` list), saving memory and time — same as HMP_2019 QMD.
+sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs")
+sweep_setting_DA_no_sd_jobs_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_jobs_with_threshold")
+# Use the same seed for all cases (1, 10, 40 DA) for consistency
+available_seeds <- unique(sweep_setting_DA_no_sd_jobs$seed)
+seed_fig3_pcoa <- available_seeds[min(seed_idx_fig3, length(available_seeds))]
+threshold_filtered <- 0.001  # Use 0.1% threshold for filtered plots
+
+# Get analysis results for filtered — all using the same seed
+analysis_1_raw <- targets::tar_read(
+  "sweep_setting_DA_no_sd_res",
+  branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_fig3_pcoa, 1, threshold_filtered)
+)[[1]]
+analysis_10_raw <- targets::tar_read(
+  "sweep_setting_DA_no_sd_res",
+  branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_fig3_pcoa, 10, threshold_filtered)
+)[[1]]
+analysis_40_raw <- targets::tar_read(
+  "sweep_setting_DA_no_sd_res",
+  branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_fig3_pcoa, 40, threshold_filtered)
+)[[1]]
+if (is.null(analysis_1_raw)) stop("analysis_1_raw is NULL")
+if (is.null(analysis_10_raw)) stop("analysis_10_raw is NULL")
+if (is.null(analysis_40_raw)) stop("analysis_40_raw is NULL")
+
+# Format analysis results for plotting
+analysis_1 <- format_analysis_results_for_plotting(analysis_1_raw, case_label = "1 DA")
+analysis_10 <- format_analysis_results_for_plotting(analysis_10_raw, case_label = "10 DA")
+analysis_40 <- format_analysis_results_for_plotting(analysis_40_raw, case_label = "40 DA")
+
+pcoa_panel_setting_DA_no_sd_filtered <- plot_pcoa_grid_multiple_methods(
+  analysis_list = list(analysis_1, analysis_10, analysis_40),
+  n_da_labels = c("1", "10", "40")
+)
+
+# Verify the plot was created
+if (is.null(pcoa_panel_setting_DA_no_sd_filtered)) {
+  stop("pcoa_panel_setting_DA_no_sd_filtered is NULL after creation")
+}
+
+# Free temporary analysis objects; keep shared sweep targets for downstream chunks
+rm(list = intersect(
+  c(
+    "available_seeds", "seed_fig3_pcoa", "threshold_filtered",
+    "analysis_1_raw", "analysis_10_raw", "analysis_40_raw",
+    "analysis_1", "analysis_10", "analysis_40"
+  ),
+  ls()
+))
+invisible(gc())
+```
+
+```{r setting-DA-no-sd-filtered-top-panel}
+# Get FPR data for all thresholds (0.005 opaque, 0.001 lighter, 0.0 lightest)
+fpr_setting_DA_no_sd_filtered <- targets::tar_read("sweep_setting_DA_no_sd_fpr")
+
+p_setting_DA_no_sd_filtered_fpr <- plot_da_taxa_sweep_results(
+  fpr_data = fpr_setting_DA_no_sd_filtered,
+  setting_name = paste0("Setting DA_no_sd (filtered): Differential abundance, no sd on overdispersion, with abundance filter (≥0.1%) (n=", n_samples, ", p=", n_taxa, 
+                       ", c=", round(intercept_disp_DA_no_sd, 2), 
+                       ", σ=", round(sigma_DA_no_sd, 5), 
+                       ", k=", round(k_fixed_DA_no_sd, 3), ")"),
+  sigma_val = sigma_DA_no_sd,
+  intercept_disp_val = intercept_disp_DA_no_sd,
+  x_limits = c(0, 40),
+  x_breaks = c(0, 10, 20, 30, 40)
+)
+
+```
+
+
+### PERMANOVA on Setting DA_no_sd (filtered): TPR with true differential composition
+
+This panel uses the same filtered simulations as the first Figure 3 sweep (**Setting DA_no_sd**, `k = 0`, `sd_log_overdispersion = 0`) and evaluates **PERMANOVA true positive rate** (detection rate) when true differential abundance is present (`n_da_taxa > 0`).
+
+```{r setting-DA-no-sd-permanova-tpr, fig.width=12, fig.height=8}
+permanova_da_tpr <- targets::tar_read("sweep_setting_DA_no_sd_permanova_tpr") %>%
+  dplyr::mutate(
+    method_label = dplyr::case_when(
+      .data$method == "permanova_bray" ~ "Bray–Curtis",
+      .data$method == "permanova_aitchison" ~ "Aitchison",
+      .data$method == "permanova_robust.aitchison" ~ "robust Aitchison",
+      .data$method == "permanova_robust_aitchison" ~ "robust Aitchison",
+      .data$method == "permanova_jaccard" ~ "Jaccard",
+      .data$method == "permanova_hellinger" ~ "Hellinger",
+      TRUE ~ NA_character_
+    ),
+    alpha_val = dplyr::case_when(
+      .data$threshold == 0.0 ~ 0.25,
+      .data$threshold == 0.005 ~ 1.0,
+      .data$threshold == 0.001 ~ 0.55,
+      TRUE ~ 1.0
+    ),
+    threshold_label = dplyr::case_when(
+      .data$threshold == 0.0 ~ "unfiltered",
+      .data$threshold == 0.005 ~ "0.5%",
+      .data$threshold == 0.001 ~ "0.1%",
+      TRUE ~ as.character(.data$threshold)
+    )
+  ) %>%
+  dplyr::filter(!is.na(.data$method_label)) %>%
+  dplyr::mutate(method_label = coerce_method_levels(.data$method_label))
+
+p_setting_DA_no_sd_permanova_tpr <- ggplot(
+  permanova_da_tpr,
+  aes(x = n_da_taxa, y = TPR, color = method_label, alpha = alpha_val)
+) +
+  geom_hline(yintercept = 0.05, linetype = "dashed", color = "grey60", linewidth = 0.1) +
+  geom_line(linewidth = 0.1, aes(group = interaction(method_label, threshold))) +
+  geom_point(size = 1.0, stroke = 0, aes(group = interaction(method_label, threshold))) +
+  scale_color_manual(values = roc_colors_all, breaks = method_levels, drop = FALSE, name = NULL) +
+  scale_alpha_identity(guide = "none") +
+  scale_x_continuous(
+    breaks = c(0, 10, 20, 30, 40),
+    limits = c(0, 40),
+    labels = format_axis_labels
+  ) +
+  scale_y_continuous(labels = format_axis_labels, limits = c(0, 1)) +
+  labs(
+    x = "Number of DA taxa",
+    y = "True positive rate (PERMANOVA)"
+  ) +
+  theme_multipanel
+
+# Keep only the final ggplot object
+rm(list = intersect(c("permanova_da_tpr"), ls()))
+invisible(gc())
+```
+
+```{r figure-3-scatter}
+standard_methods_for_scatter <- c("Bray–Curtis", "Aitchison", "robust Aitchison", "Jaccard", "Hellinger")
+
+# Figure 2 provides the *power* side for differential dispersion.
+# Summarize **FNR** over delta > 0 (exclude null), by method and threshold.
+fnr_fig2 <- fnr_sweep_realistic_taxa_filtered %>%
+  dplyr::filter(delta > 0) %>%
+  dplyr::group_by(method, threshold) %>%
+  dplyr::summarise(
+    avg_fnr = mean(FNR, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  dplyr::filter(method %in% standard_methods_for_scatter) %>%
+  dplyr::mutate(
+    threshold_label = dplyr::case_when(
+      threshold == 0.005 ~ "0.5%",
+      threshold == 0.001 ~ "0.1%",
+      threshold == 0.0 ~ "unfiltered",
+      TRUE ~ as.character(threshold)
+    ),
+    alpha_val = dplyr::case_when(
+      threshold == 0.005 ~ 1.0,
+      threshold == 0.001 ~ 0.55,
+      threshold == 0.0 ~ 0.25,
+      TRUE ~ 1.0
+    )
+  )
+
+cat("\n=== Average FNR from Figure 2 (delta > 0) ===\n")
+print(fnr_fig2 %>% dplyr::arrange(method))
+
+# Figure 3 provides the *FPR* side from the DA sweep:
+# Average FPR across all n_da_taxa values for Setting DA_no_sd, by method and threshold.
+fpr_fig3_data <- fpr_setting_DA_no_sd_filtered %>%
+    dplyr::mutate(method_label = dplyr::case_when(
+      method == "permdisp_bray" ~ "Bray–Curtis",
+      method == "permdisp_aitchison" ~ "Aitchison",
+      method == "permdisp_robust.aitchison" ~ "robust Aitchison",
+    method == "permdisp_robust_aitchison" ~ "robust Aitchison",
+      method == "permdisp_jaccard" ~ "Jaccard",
+      method == "permdisp_hellinger" ~ "Hellinger",
+    as.character(method) %in% standard_methods_for_scatter ~ as.character(method),
+    TRUE ~ NA_character_
+    )) %>%
+  dplyr::filter(!is.na(method_label))
+
+fpr_col <- if ("FPR" %in% names(fpr_fig3_data)) "FPR" else "fpr"
+
+# Average FPR across all n_da_taxa values for each method and threshold
+fpr_fig3 <- fpr_fig3_data %>%
+  dplyr::group_by(method_label, threshold) %>%
+  dplyr::summarise(
+    avg_fpr = mean(.data[[fpr_col]], na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  dplyr::rename(method = method_label) %>%
+  dplyr::filter(method %in% standard_methods_for_scatter) %>%
+  dplyr::mutate(
+    threshold_label = dplyr::case_when(
+      threshold == 0.005 ~ "0.5%",
+      threshold == 0.001 ~ "0.1%",
+      threshold == 0.0 ~ "unfiltered",
+      TRUE ~ as.character(threshold)
+    ),
+    alpha_val = dplyr::case_when(
+      threshold == 0.005 ~ 1.0,
+      threshold == 0.001 ~ 0.55,
+      threshold == 0.0 ~ 0.25,
+      TRUE ~ 1.0
+    )
+  )
+
+cat("\n=== Average FPR from Figure 3 Setting DA_no_sd (filtered) (averaged across all n_da_taxa) ===\n")
+print(fpr_fig3 %>% dplyr::arrange(method))
+
+scatter_data <- fnr_fig2 %>%
+  dplyr::inner_join(fpr_fig3, by = c("method", "threshold", "threshold_label", "alpha_val")) %>%
+  dplyr::mutate(
+    method = factor(method, levels = standard_methods_for_scatter),
+    threshold_label = factor(threshold_label, levels = c("0.5%", "0.1%", "unfiltered"))
+  )
+
+plot_data <- scatter_data %>% dplyr::filter(!is.na(avg_fnr) & !is.na(avg_fpr))
+
+# Calculate linear regression manually for full-range line with SD bands
+lm_fit <- lm(avg_fpr ~ avg_fnr, data = plot_data)
+residual_sd <- sd(residuals(lm_fit))
+
+# Create prediction data across full plot range (0 to max x)
+x_range <- c(0, max(plot_data$avg_fnr, na.rm = TRUE) * 1.1)  # Extend slightly beyond data
+x_pred <- seq(x_range[1], x_range[2], length.out = 200)
+pred_data <- data.frame(avg_fnr = x_pred)
+pred_data$avg_fpr <- predict(lm_fit, newdata = pred_data)
+pred_data$ymin <- pred_data$avg_fpr - residual_sd
+pred_data$ymax <- pred_data$avg_fpr + residual_sd
+
+p_scatter_fnr_fpr <- ggplot(plot_data, aes(x = avg_fnr, y = avg_fpr, color = method)) +
+  geom_vline(xintercept = 0.05, linetype = "dashed", color = "grey50", linewidth = 0.5) +
+  geom_hline(yintercept = 0.05, linetype = "dashed", color = "grey50", linewidth = 0.5) +
+  geom_ribbon(data = pred_data, aes(x = avg_fnr, ymin = ymin, ymax = ymax), 
+              inherit.aes = FALSE, fill = "lightgrey", alpha = 0.5) +
+  geom_line(data = pred_data, aes(x = avg_fnr, y = avg_fpr), 
+            inherit.aes = FALSE, color = "grey", linewidth = 0.8) +
+  geom_point(aes(shape = threshold_label, alpha = alpha_val), size = 1.1) +
+  ggrepel::geom_text_repel(
+    data = dplyr::filter(plot_data, threshold == 0.005),
+    aes(label = method),
+    size = 3,
+    show.legend = FALSE
+  ) +
+  scale_color_manual(values = roc_colors_all[standard_methods_for_scatter], breaks = standard_methods_for_scatter, drop = FALSE, name = NULL) +
+  scale_shape_manual(values = c("0.5%" = 16, "0.1%" = 17, "unfiltered" = 15), name = "Threshold") +
+  scale_alpha_identity(guide = "none") +
+  scale_x_continuous(name = "Average false negative rate (Figure 2; delta > 0)", limits = c(0, NA), labels = format_axis_labels) +
+  scale_y_continuous(name = "Average false positive rate (Figure 3 Setting DA_no_sd filtered)", limits = c(0, NA), labels = format_axis_labels) +
+  theme_multipanel +
+  theme(
+    legend.position = "bottom",
+    panel.grid.minor = element_blank()
+  )
+```
+
+```{r figure-3-scatter-diagnostics}
+# Print diagnostic information about FPR and FNR values used in performance plot
+cat("\n=== Average FNR from Figure 2 (delta > 0) ===\n")
+print(fnr_fig2 %>% dplyr::arrange(method))
+
+cat("\n=== Average FPR from Figure 3 Setting DA_no_sd (filtered) (averaged across all n_da_taxa) ===\n")
+print(fpr_fig3 %>% dplyr::arrange(method))
+```
+
+```{r figure-3-top-row}
+# Create plots for 40 DA case (Setting DA_no_sd) for top row of Figure 3
+# Use 40 DA simulation + analysis from sweep outputs (then filter for plotting)
+# Branch strategy: load only the one simulation branch and one analysis branch.
+if (!exists("sweep_setting_DA_no_sd_jobs", inherits = FALSE)) {
+  sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs")
+}
+if (!exists("sweep_setting_DA_no_sd_jobs_with_threshold", inherits = FALSE)) {
+  sweep_setting_DA_no_sd_jobs_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_jobs_with_threshold")
+}
+# Use the same seed as PCoA plots for consistency (uses seed_idx_fig3 from figure-3-seed-selection chunk)
+available_seeds_fig3 <- unique(sweep_setting_DA_no_sd_jobs$seed)
+seed_40_da_fig3 <- available_seeds_fig3[min(seed_idx_fig3, length(available_seeds_fig3))]
+# Use threshold = 0.001 (0.1%) for Figure 3
+threshold_fig3 <- 0.001
+idx_40_da <- get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_40_da_fig3, 40)
+sim_40_da <- targets::tar_read("sweep_setting_DA_no_sd_sim", branches = idx_40_da)[[1]]
+sim_40_da_filtered <- sim_40_da
+sim_40_da_filtered$count_long <- filter_by_abundance_for_plot(
+  sim_40_da$count_long,
+  0.001  # Use 0.1% threshold for Figure 3
+)
+
+# Run comparison for 40 DA case (filtered analysis from sweeps)
+cmp_40_da <- format_analysis_results_for_plotting(
+  analysis_results = targets::tar_read(
+    "sweep_setting_DA_no_sd_res",
+    branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_40_da_fig3, 40, threshold_fig3)
+  )[[1]],
+  case_label = "Setting DA_no_sd (40 DA, filtered)"
+)
+
+# Release job tables once the single 40-DA slice is materialized
+rm(list = intersect(
+  c(
+    "sweep_setting_DA_no_sd_jobs",
+    "sweep_setting_DA_no_sd_jobs_with_threshold",
+    "available_seeds_fig3", "idx_40_da"
+  ),
+  ls()
+))
+invisible(gc())
+
+# Get top 30 most abundant taxa for whisker plot (from original unfiltered simulation)
+taxon_abundance_40_da_original <- sim_40_da$count_long %>%
+  dplyr::mutate(proportion = count / library_size) %>%
+  dplyr::group_by(taxon_id) %>%
+  dplyr::summarise(mean_prop = mean(proportion, na.rm = TRUE), .groups = "drop") %>%
+  dplyr::arrange(dplyr::desc(mean_prop)) %>%
+  dplyr::slice_head(n = 30) %>%
+  dplyr::pull(taxon_id)
+
+# Check how many of the top 30 remain after filtering
+top30_after_filter_40_da <- sum(taxon_abundance_40_da_original %in% unique(sim_40_da_filtered$count_long$taxon_id))
+
+cat("\n**Figure 3 Whisker Plot Taxa Selection:**\n")
+cat("- Top 30 taxa selected from original simulation\n")
+cat("- Top 30 taxa remaining after 0.1% filter:", top30_after_filter_40_da, "out of 30\n")
+cat("- Taxa shown in whisker plot:", top30_after_filter_40_da, "\n")
+cat("\n")
+
+# Create whisker plot for top 30 most abundant taxa (40 DA case, filtered)
+arcsin_sqrt_trans_40_da <- scales::trans_new(
+  name = "arcsin_sqrt",
+  transform = function(x) asin(sqrt(pmax(0, pmin(1, x)))),
+  inverse = function(y) sin(y)^2,
+  breaks = scales::extended_breaks(),
+  domain = c(0, 1)
+)
+
+d_whisker_40_da <- sim_40_da_filtered$count_long %>%
+    dplyr::filter(taxon_id %in% taxon_abundance_40_da_original) %>%
+    dplyr::mutate(proportion = count / library_size) %>%
+    dplyr::group_by(group, taxon_id) %>%
+    dplyr::summarise(
+      mean_prop = mean(proportion, na.rm = TRUE),
+      p_low = stats::quantile(proportion, 0.025, na.rm = TRUE),
+      p_high = stats::quantile(proportion, 0.975, na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+taxon_order_whisker_40_da <- d_whisker_40_da %>%
+    dplyr::group_by(taxon_id) %>%
+    dplyr::summarise(overall_mean = mean(mean_prop, na.rm = TRUE), .groups = "drop") %>%
+    dplyr::arrange(dplyr::desc(overall_mean)) %>%
+    dplyr::pull(taxon_id)
+  
+d_whisker_40_da <- d_whisker_40_da %>%
+  dplyr::mutate(taxon_id = factor(taxon_id, levels = taxon_order_whisker_40_da))
+  
+prop_breaks_whisker_40_da <- c(0.001, 0.01, 0.05, 0.1, 0.2, 0.3, 0.5)
+prop_breaks_whisker_40_da <- prop_breaks_whisker_40_da[prop_breaks_whisker_40_da <= max(d_whisker_40_da$p_high, na.rm = TRUE) * 1.1]
+  
+p_whisker_40_da <- ggplot(d_whisker_40_da, aes(x = taxon_id, y = mean_prop, ymin = p_low, ymax = p_high, color = group)) +
+    ggplot2::geom_linerange(position = ggplot2::position_dodge(width = 0.6), linewidth = 0.5, alpha = 0.8) +
+    ggplot2::geom_point(position = ggplot2::position_dodge(width = 0.6), size = 1.0, stroke = 0) +
+  ggplot2::scale_color_manual(values = cols_prgn_setting5, name = NULL) +
+    ggplot2::scale_y_continuous(
+    trans = arcsin_sqrt_trans_40_da,
+    breaks = prop_breaks_whisker_40_da,
+      labels = function(x) gsub("\\.0%", "%", scales::percent_format(accuracy = 0.1)(x))
+    ) +
+    ggplot2::labs(
+      x = "Taxon (ordered by mean proportion)",
+      y = "Proportion (arcsin-sqrt scale, 95% CI)"
+    ) +
+    theme_multipanel +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_blank(),
+      axis.ticks.x = ggplot2::element_blank(),
+      legend.position = "bottom"
+    )
+  
+# Create alpha diversity plot for 40 DA case (filtered)
+alpha_plot_40_da <- plot_alpha_diversity_scatter(sim_40_da_filtered, case_label = "Setting DA_no_sd (40 DA, filtered)")
+if (!is.null(alpha_plot_40_da)) {
+  alpha_plot_40_da <- alpha_plot_40_da +
+    ggplot2::scale_color_manual(values = cols_prgn_setting5, guide = "none") +
+    ggplot2::scale_fill_manual(values = cols_prgn_setting5, guide = "none")
+} else {
+  warning("alpha_plot_40_da is NULL")
+}
+
+# Create boxplots for 40 DA case (5 methods) with facets
+distances_non_ibd_40_da <- cmp_40_da$distances_long %>%
+  dplyr::mutate(method_char = as.character(method)) %>%
+  dplyr::filter(!startsWith(method_char, "ibd")) %>%
+  dplyr::mutate(method_label = sapply(method_char, pretty_method_label_box)) %>%
+  dplyr::mutate(method_group = dplyr::case_when(
+    method_label %in% c("Aitchison", "robust Aitchison") ~ "Aitchison methods",
+    TRUE ~ "Other methods"
+  ))
+
+p_boxplots_40_da <- ggplot(distances_non_ibd_40_da, aes(x = method_label, y = distance, fill = group)) +
+  geom_boxplot(width = 0.5, outlier.size = 0.1, alpha = 0.85, linewidth = 0.25, outlier.stroke = 0, position = position_dodge(width = 0.8)) +
+  geom_jitter(size = 1.0, alpha = 0.25, stroke = 0, position = position_jitterdodge(dodge.width = 0.8, jitter.width = 0.12)) +
+  scale_fill_manual(values = cols_prgn_setting5, labels = c("non-IBD" = "non-IBD", "IBD" = "IBD"), name = NULL) +
+  facet_wrap(~ method_group, nrow = 1, scales = "free", space = "free_x") +
+  labs(x = NULL, y = "Distance to centroid") +
+  theme_multipanel +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 6),
+  )
+
+# Create top row without spacer
+p_figure3_row1 <- (p_whisker_40_da | alpha_plot_40_da | p_boxplots_40_da) + 
+  patchwork::plot_layout(widths = c(0.35, 0.325, 0.325), guides = "collect") &
+  theme(plot.margin = margin(0, 0, 0, 0, "pt"), legend.key.size = unit(0.2, 'cm'))
+
+# Drop heavy intermediates after composing the final row object
+rm(list = intersect(
+  c(
+    "sim_40_da", "sim_40_da_filtered", "cmp_40_da", "seed_40_da_fig3", "threshold_fig3",
+    "taxon_abundance_40_da_original", "top30_after_filter_40_da",
+    "arcsin_sqrt_trans_40_da", "d_whisker_40_da", "taxon_order_whisker_40_da",
+    "prop_breaks_whisker_40_da", "distances_non_ibd_40_da",
+    "p_whisker_40_da", "alpha_plot_40_da", "p_boxplots_40_da"
+  ),
+  ls()
+))
+invisible(gc())
+```
+
+```{r figure-3, fig.width=16, fig.height=12}
+#| fig-cap: "Figure 3. Top row: composition-level diagnostics for Setting DA_no_sd at 40 DA taxa (whisker plot, alpha-diversity scatter, and distance-to-centroid boxplots). Bottom-left column: (1) PERMDISP false positive rate sweep for Setting DA_no_sd (filtered), (2) PERMANOVA true positive rate sweep on the same Setting DA_no_sd simulations (filtered), and (3) FNR-FPR summary scatter. Bottom-right column: PCoA panels for Setting DA_no_sd (filtered)."
+# Organize Figure 3 in two columns:
+# Top row: whisker plot (40 DA) | alpha diversity (40 DA) | boxplots (40 DA)
+# Bottom: Left column: 3 rows (Setting DA_no_sd filtered FPR sweep, Setting DA_no_sd PERMANOVA TPR sweep, scatter plot)
+#         Right column: PCoA plots for Setting DA_no_sd filtered
+
+# Check that all plots exist and are valid
+cat("Checking plots for Figure 3...\n")
+cat("  p_figure3_row1:", !is.null(p_figure3_row1), ", class:", class(p_figure3_row1), "\n")
+cat("  p_setting_DA_no_sd_filtered_fpr:", !is.null(p_setting_DA_no_sd_filtered_fpr), ", class:", class(p_setting_DA_no_sd_filtered_fpr), "\n")
+cat("  p_setting_DA_no_sd_permanova_tpr:", !is.null(p_setting_DA_no_sd_permanova_tpr), ", class:", class(p_setting_DA_no_sd_permanova_tpr), "\n")
+cat("  p_scatter_fnr_fpr:", !is.null(p_scatter_fnr_fpr), ", class:", class(p_scatter_fnr_fpr), "\n")
+cat("  pcoa_panel_setting_DA_no_sd_filtered:", !is.null(pcoa_panel_setting_DA_no_sd_filtered), ", class:", class(pcoa_panel_setting_DA_no_sd_filtered), "\n")
+
+# Try building patchwork step by step
+left_col <- p_setting_DA_no_sd_filtered_fpr / p_setting_DA_no_sd_permanova_tpr / p_scatter_fnr_fpr
+cat("  left_col created, class:", class(left_col), "\n")
+
+right_col <- pcoa_panel_setting_DA_no_sd_filtered
+cat("  right_col created, class:", class(right_col), "\n")
+
+# Align bottom row with proper spacing
+bottom_row <- left_col | right_col
+cat("  bottom_row created, class:", class(bottom_row), "\n")
+
+p_figure3 <- p_figure3_row1 / bottom_row
+cat("  p_figure3 created, class:", class(p_figure3), "\n")
+
+p_figure3 <- p_figure3 +
+  patchwork::plot_layout(guides = "collect", widths = c(1, 1), heights = c(1, 3)) &
+  theme(plot.margin = margin(0, 0, 0, 0, "pt"), legend.key.size = unit(0.2, 'cm'), legend.position = "bottom")
+
+p_figure3
+
+ggsave("Figure_3.pdf", p_figure3, width = 183, height = 230, units = "mm")
+```
+
+```{r cleanup-after-figure-3}
+# Release heavy Figure 3 objects before supplementary figure 3
+rm(list = intersect(
+  c(
+    "p_setting_DA_no_sd_filtered_fpr", "p_setting_DA_no_sd_permanova_tpr", "p_scatter_fnr_fpr",
+    "pcoa_panel_setting_DA_no_sd_filtered", "p_figure3_row1", "left_col", "right_col",
+    "bottom_row", "p_figure3", "cmp_40_da", "sim_40_da", "sim_40_da_filtered",
+    "p_whisker_40_da", "alpha_plot_40_da", "p_boxplots_40_da", "distances_non_ibd_40_da",
+    "d_whisker_40_da", "fpr_fig3_data", "fpr_fig3", "fnr_fig2", "scatter_data", "plot_data",
+    "permanova_da_results", "permanova_da_tpr",
+    "pred_data", "lm_fit"
+  ),
+  ls()
+))
+invisible(gc())
+```
+
+## Supplementary Figure 3: Setting DA_no_sd and Setting DA_sd
+
+### Setting DA_no_sd: Differential abundance, no sd on overdispersion
+
+This setting sweeps over the number of DA taxa (0, 1, 2, 3, ...) using slopes sampled from **significant DA taxa only** (credible interval excludes 0). Uses **k = 0 (no mean-OD association)** to ensure proper FPR testing at n_da_taxa = 0; with `sd_log_overdispersion = 0`, taxa also share the same baseline OD within and across groups at the null. This tests how method performance changes as we progressively add more DA taxa, starting from no DA (FPR test) to increasing numbers of DA taxa (power test).
+
+```{r supp-fig-3, fig.width=16, fig.height=16}
+# Branch strategy: read only the three DA_no_sd / DA_sd branches needed for PCoA panels.
+sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs")
+sweep_setting_DA_sd_jobs <- targets::tar_read("sweep_setting_DA_sd_jobs")
+# Use available seeds (with n_reps_auc=2, we have seeds 12001 and 12002)
+available_seeds_supp <- unique(sweep_setting_DA_no_sd_jobs$seed)
+seed_1_da_supp <- available_seeds_supp[1]
+seed_20_da_supp <- if(length(available_seeds_supp) >= 2) available_seeds_supp[2] else available_seeds_supp[1]
+seed_40_da_supp <- if(length(available_seeds_supp) >= 2) available_seeds_supp[2] else available_seeds_supp[1]
+idx_1_da <- get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_1_da_supp, 1)
+idx_20_da <- get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_20_da_supp, 20)
+idx_40_da <- get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_40_da_supp, 40)
+
+# Job tables are no longer needed after index selection
+rm(list = intersect(c("sweep_setting_DA_no_sd_jobs", "sweep_setting_DA_sd_jobs", "available_seeds_supp"), ls()))
+invisible(gc())
+
+# Format analysis results for plotting
+analysis_DA_no_sd_1 <- format_analysis_results_for_plotting(
+  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_1_da)[[1]],
+  case_label = "1 DA"
+)
+analysis_DA_no_sd_20 <- format_analysis_results_for_plotting(
+  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_20_da)[[1]],
+  case_label = "20 DA"
+)
+analysis_DA_no_sd_40 <- format_analysis_results_for_plotting(
+  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_40_da)[[1]],
+  case_label = "40 DA"
+)
+
+analysis_DA_sd_1 <- format_analysis_results_for_plotting(
+  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_1_da)[[1]],
+  case_label = "1 DA"
+)
+analysis_DA_sd_20 <- format_analysis_results_for_plotting(
+  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_20_da)[[1]],
+  case_label = "20 DA"
+)
+analysis_DA_sd_40 <- format_analysis_results_for_plotting(
+  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_40_da)[[1]],
+  case_label = "40 DA"
+)
+
+rm(list = intersect(c("idx_1_da", "idx_20_da", "idx_40_da"), ls()))
+invisible(gc())
+
+pcoa_panel_setting_DA_no_sd <- plot_pcoa_grid_multiple_methods(
+  analysis_list = list(analysis_DA_no_sd_1, analysis_DA_no_sd_20, analysis_DA_no_sd_40),
+  n_da_labels = c("1", "20", "40")
+)
+pcoa_panel_setting_DA_sd <- plot_pcoa_grid_multiple_methods(
+  analysis_list = list(analysis_DA_sd_1, analysis_DA_sd_20, analysis_DA_sd_40),
+  n_da_labels = c("1", "20", "40")
+)
+
+# Keep only the final PCoA panel objects
+rm(list = intersect(
+  c(
+    "analysis_DA_no_sd_1", "analysis_DA_no_sd_20", "analysis_DA_no_sd_40",
+    "analysis_DA_sd_1", "analysis_DA_sd_20", "analysis_DA_sd_40"
+  ),
+  ls()
+))
+invisible(gc())
+
+if (exists("fpr_setting_DA_no_sd_filtered", inherits = FALSE)) {
+  fpr_setting_DA_no_sd <- fpr_setting_DA_no_sd_filtered
+} else {
+  fpr_setting_DA_no_sd <- targets::tar_read("sweep_setting_DA_no_sd_fpr")
+}
+fpr_setting_DA_sd <- targets::tar_read("sweep_setting_DA_sd_fpr")
+
+p_setting_DA_no_sd <- plot_da_taxa_sweep_results(
+  fpr_data = fpr_setting_DA_no_sd,
+  setting_name = paste0("Setting DA_no_sd: Differential abundance, no sd on overdispersion (n=", n_samples, ", p=", n_taxa, 
+                       ", c=", round(intercept_disp_DA_no_sd, 2), 
+                       ", σ=", round(sigma_DA_no_sd, 5), 
+                       ", k=", round(k_fixed_DA_no_sd, 3), ")"),
+  sigma_val = sigma_DA_no_sd,
+  intercept_disp_val = intercept_disp_DA_no_sd
+)
+
+p_setting_DA_sd <- plot_da_taxa_sweep_results(
+  fpr_data = fpr_setting_DA_sd,
+  setting_name = paste0("Setting DA_sd: Differential abundance, with sd on overdispersion (n=", n_samples, ", p=", n_taxa, 
+                       ", c=", round(intercept_disp_DA_sd, 2), 
+                       ", σ=", round(sigma_DA_sd, 5), 
+                       ", k=", round(k_fixed_DA_sd, 3),
+                       ", sd_log_od=", round(prec_sd_real, 3), ")"),
+  sigma_val = sigma_DA_sd,
+  intercept_disp_val = intercept_disp_DA_sd
+)
+
+# Keep only final sweep plot objects
+rm(list = intersect(c("fpr_setting_DA_no_sd", "fpr_setting_DA_sd"), ls()))
+invisible(gc())
+
+p_setting_DA_no_sd_top <- (p_setting_DA_no_sd | pcoa_panel_setting_DA_no_sd) + 
+  patchwork::plot_layout(guides = "collect", widths = c(1, 1)) &
+  theme(plot.margin = margin(0, 0, 0, 0, "pt"), legend.key.size = unit(0.2, 'cm'), legend.position = "bottom")
+
+p_setting_DA_sd_top <- (p_setting_DA_sd | pcoa_panel_setting_DA_sd) + 
+  patchwork::plot_layout(guides = "collect", widths = c(1, 1)) &
+  theme(plot.margin = margin(0, 0, 0, 0, "pt"), legend.key.size = unit(0.2, 'cm'), legend.position = "bottom")
+
+fig_supp_3 <- p_setting_DA_no_sd_top / p_setting_DA_sd_top +
+  patchwork::plot_layout(guides = "collect", heights = c(1, 1)) &
+  theme(plot.margin = margin(0, 0, 0, 0, "pt"), legend.key.size = unit(0.2, 'cm'), legend.position = "bottom")
+
+fig_supp_3
+
+ggsave("Supp_Figure_3.pdf", fig_supp_3, width = 183, height = 230, units = "mm")
+```
+
+```{r cleanup-after-supp-figure-3}
+# Final cleanup before summary tables/text
+rm(list = intersect(
+  c(
+    "sweep_setting_DA_no_sd_jobs", "sweep_setting_DA_sd_jobs",
+    "sweep_setting_DA_no_sd_res", "sweep_setting_DA_sd_res",
+    "analysis_DA_no_sd_1", "analysis_DA_no_sd_20", "analysis_DA_no_sd_40",
+    "analysis_DA_sd_1", "analysis_DA_sd_20", "analysis_DA_sd_40",
+    "pcoa_panel_setting_DA_no_sd", "pcoa_panel_setting_DA_sd",
+    "fpr_setting_DA_no_sd", "fpr_setting_DA_sd",
+    "p_setting_DA_no_sd", "p_setting_DA_sd",
+    "p_setting_DA_no_sd_top", "p_setting_DA_sd_top", "fig_supp_3"
+  ),
+  ls()
+))
+invisible(gc())
+```
+
+
+# Summary
+
+## Parameter Summary Table
+
+```{r parameter-summary}
+param_summary <- tibble::tibble(
+  Parameter = c(
+    "Number of samples",
+    "Number of taxa (genera)",
+    "prec_coeff[2] (mean-precision slope)",
+    "k (= prec_coeff[2])",
+    "Mean-OD association (= -k)",
+    "prec_coeff[1] (precision intercept)",
+    "c (= -prec_coeff[1])",
+    "Precision SD (prec_sd)",
+    "Baseline intercept range",
+    "Group effect (slope) range"
+  ),
+  `sccomp Value` = c(
+    as.character(n_samples_real),
+    as.character(n_taxa_real),
+    round(prec_coeff_summary$mean[2], 4),
+    round(k_real, 4),
+    round(-k_real, 4),
+    round(prec_coeff_summary$mean[1], 4),
+    round(c_real, 4),
+    round(prec_sd_real, 4),
+    paste0("[", round(min(intercept_effects), 2), ", ", round(max(intercept_effects), 2), "]"),
+    paste0("[", round(min(slope_effects), 2), ", ", round(max(slope_effects), 2), "]")
+  ),
+  `Simulation Value` = c(
+    as.character(n_samples),
+    as.character(n_taxa),
+    "N/A",
+    round(k_realistic, 4),
+    round(-k_realistic, 4),
+    "N/A",
+    round(intercept_disp_realistic, 4),
+    round(prec_sd_real, 4),
+    paste0("[", round(min(mu_inv_softmax_base_realistic), 2), ", ", round(max(mu_inv_softmax_base_realistic), 2), "]"),
+    paste0("[", round(min(slope_realistic), 2), ", ", round(max(slope_realistic), 2), "]")
+  )
+)
+
+knitr::kable(param_summary, caption = "Summary of HMP2 parameters used for realistic simulation")
+```
+
+## Key Findings
+
+The simulation uses parameters extracted directly from the HMP2 microbiome dataset sccomp fit.
+
+### Parameter Mapping (sccomp → Simulator)
+
+**sccomp uses precision**: `log(precision) = prec_coeff[1] + prec_coeff[2] × log(mean)`
+
+**Simulator uses overdispersion (σ)**: `log(σ) = -k × log(mean) + c`
+
+Since `precision ≈ 1/σ`, we have `log(σ) ≈ -log(precision)`, so:
+
+- **k = prec_coeff[2]** = `r round(k_real, 4)` (the slope transfers directly)
+- **c = -prec_coeff[1]** = `r round(c_real, 4)` (the intercept is negated)
+
+### Interpretation
+
+With k = `r round(k_real, 4)` (negative):
+- The simulator formula becomes: `log(σ) = -(`r round(k_real, 4)`) × log(μ) + c = +`r round(-k_real, 4)` × log(μ) + c`
+- **Higher mean abundance → higher σ → MORE overdispersion** ✓
+
+This matches the biological expectation that abundant taxa tend to be more variable.
+
+### Additional Parameters
+
+- **Variability around k (prec_sd)**: `r round(prec_sd_real, 4)` - This adds realistic variation to the simulations.
+- **Baseline abundances**: Sampled from the real HMP2 intercept distribution.
+- **Group effects (slopes)**: Sampled from the real HMP2 IBD vs Healthy effect distribution.
+
+4. **Baseline abundances**: Sampled from the real distribution of intercept effects, capturing the natural variation in taxa abundances.
+
+5. **Group effects**: Based on the real IBD vs Healthy effect size distribution.
+
+This approach ensures the simulation conditions reflect what we observe in real microbiome studies, providing more meaningful validation of beta-diversity distance inputs for PERMDISP.
