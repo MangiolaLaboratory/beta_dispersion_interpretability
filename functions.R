@@ -2033,11 +2033,71 @@ build_arcsin_residual_with_location_betadisper_inputs <- function(
   list(dist = dist_obj, group = group_factor)
 }
 
+.alpha_diversity_table_to_plot <- function(alpha_data, case_label, group_colors, plot_subtitle) {
+  summary_tbl <- alpha_data %>%
+    dplyr::group_by(group) %>%
+    dplyr::summarise(
+      mean_richness = mean(richness),
+      sd_richness = sd(richness),
+      mean_shannon = mean(shannon),
+      sd_shannon = sd(shannon),
+      mean_evenness = mean(pielou_evenness),
+      sd_evenness = sd(pielou_evenness),
+      .groups = "drop"
+    )
+
+  safe_ttest <- function(formula, data) {
+    tryCatch(
+      stats::t.test(formula, data = data),
+      error = function(e) list(p.value = NA, statistic = NA, estimate = c(NA, NA), message = e$message)
+    )
+  }
+
+  tests <- list(
+    richness = safe_ttest(richness ~ group, data = alpha_data),
+    shannon = safe_ttest(shannon ~ group, data = alpha_data),
+    evenness = safe_ttest(pielou_evenness ~ group, data = alpha_data)
+  )
+
+  set.seed(12345)
+  alpha_data_jitter <- alpha_data %>%
+    dplyr::mutate(
+      richness_j = richness + stats::rnorm(dplyr::n(), 0, 0.01),
+      evenness_j = pielou_evenness + stats::rnorm(dplyr::n(), 0, 0.001)
+    )
+
+  p <- ggplot2::ggplot(alpha_data, ggplot2::aes(x = richness, y = pielou_evenness, color = group)) +
+    ggplot2::geom_point(size = 0.1, alpha = 0.6, stroke = 0) +
+    ggplot2::stat_ellipse(
+      data = alpha_data_jitter,
+      ggplot2::aes(x = richness_j, y = evenness_j, color = group),
+      level = 0.95, linewidth = 0.25, type = "norm"
+    ) +
+    ggplot2::scale_color_manual(values = group_colors) +
+    ggplot2::labs(
+      title = paste0("Alpha Diversity: Evenness vs Richness (", case_label, ")"),
+      subtitle = plot_subtitle,
+      x = "Richness (# of observed taxa)",
+      y = "Pielou's Evenness",
+      color = "Group"
+    ) +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(
+      plot.title = ggplot2::element_text(hjust = 0.5, size = 14, face = "bold"),
+      plot.subtitle = ggplot2::element_text(hjust = 0.5, size = 11),
+      legend.position = "bottom"
+    )
+
+  list(data = alpha_data, summary = summary_tbl, tests = tests, plot = p)
+}
+
 #' Alpha diversity analysis (richness, Shannon, evenness) with group comparison
 #'
 #' Computes richness (observed taxa), Shannon entropy, and Pielou evenness per
-#' sample. Summarizes by group and runs t-tests. Returns a list with summary
-#' table, tests, plot (PCoA of alpha metrics with stat_ellipse), and raw alpha_data.
+#' sample from raw counts (no rarefaction). Summarizes by group and runs t-tests.
+#' Returns a list with summary table, tests, plot, and raw `alpha_data`.
+#'
+#' For depth-controlled estimates, see [run_alpha_diversity_analysis_normalised].
 #'
 #' @param sim_result Output from simulate_compositional_bb.
 #' @param case_label Label for plot title.
@@ -2098,65 +2158,125 @@ run_alpha_diversity_analysis <- function(
     ) %>%
     dplyr::mutate(group = factor(group, levels = gl))
 
-  summary_tbl <- alpha_data %>%
-    dplyr::group_by(group) %>%
-    dplyr::summarise(
-      mean_richness = mean(richness),
-      sd_richness = sd(richness),
-      mean_shannon = mean(shannon),
-      sd_shannon = sd(shannon),
-      mean_evenness = mean(pielou_evenness),
-      sd_evenness = sd(pielou_evenness),
-      .groups = "drop"
-    )
+  plot_subtitle <- "Points = samples, Ellipses = 95% confidence intervals"
 
-  # Wrap t.tests in tryCatch to handle constant data (e.g., equal baseline)
-  safe_ttest <- function(formula, data) {
-    tryCatch(
-      stats::t.test(formula, data = data),
-      error = function(e) list(p.value = NA, statistic = NA, estimate = c(NA, NA), message = e$message)
+  .alpha_diversity_table_to_plot(alpha_data, case_label, group_colors, plot_subtitle)
+}
+
+#' Alpha diversity with iterative rarefaction (read-depth control)
+#'
+#' Same summaries and plot style as [run_alpha_diversity_analysis], but richness,
+#' Shannon, and Pielou are computed via [mia::getAlpha] after iterative rarefaction
+#' to a common depth (default: minimum library size).
+#'
+#' @param sim_result Output from simulate_compositional_bb.
+#' @param case_label Label for plot title.
+#' @param group_levels Character vector of factor levels for `group`.
+#' @param group_colors Named vector of colors; names must include every level in `group_levels`.
+#' @param rarefy_niter Number of rarefaction rounds passed to [mia::getAlpha] (e.g. `50`).
+#' @param rarefy_sample Rarefaction depth (counts per draw). `NULL` uses minimum column sum.
+#' @return List with summary, tests, plot, data (same structure as [run_alpha_diversity_analysis]).
+run_alpha_diversity_analysis_normalised <- function(
+  sim_result,
+  case_label = "Case",
+  group_levels,
+  group_colors,
+  rarefy_niter = 50L,
+  rarefy_sample = NULL
+) {
+  if (missing(group_levels) || missing(group_colors)) {
+    stop(
+      "run_alpha_diversity_analysis_normalised() requires `group_levels` and `group_colors`.",
+      call. = FALSE
     )
   }
-  
-  tests <- list(
-    richness = safe_ttest(richness ~ group, data = alpha_data),
-    shannon = safe_ttest(shannon ~ group, data = alpha_data),
-    evenness = safe_ttest(pielou_evenness ~ group, data = alpha_data)
+
+  gl <- as.character(group_levels)
+  if (length(gl) < 1L) {
+    stop("run_alpha_diversity_analysis_normalised(): `group_levels` must be non-empty.", call. = FALSE)
+  }
+  if (is.null(names(group_colors)) || any(names(group_colors) == "")) {
+    stop("run_alpha_diversity_analysis_normalised(): `group_colors` must be named.", call. = FALSE)
+  }
+  miss_col <- setdiff(gl, names(group_colors))
+  if (length(miss_col) > 0) {
+    stop(
+      "run_alpha_diversity_analysis_normalised(): `group_colors` missing names for: ",
+      paste(miss_col, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  group_colors <- unname(group_colors[gl])
+  names(group_colors) <- gl
+
+  if (!is.numeric(rarefy_niter) || length(rarefy_niter) != 1L || rarefy_niter < 1L) {
+    stop("run_alpha_diversity_analysis_normalised(): `rarefy_niter` must be a positive integer.", call. = FALSE)
+  }
+  rarefy_niter <- as.integer(rarefy_niter)
+
+  if (!requireNamespace("mia", quietly = TRUE)) {
+    stop("run_alpha_diversity_analysis_normalised() requires package `mia`.", call. = FALSE)
+  }
+  if (!requireNamespace("SummarizedExperiment", quietly = TRUE)) {
+    stop("run_alpha_diversity_analysis_normalised() requires package `SummarizedExperiment`.", call. = FALSE)
+  }
+
+  count_long <- sim_result$count_long
+  required_cols <- c("sample_id", "group", "count", "taxon_id")
+  missing_cols <- setdiff(required_cols, colnames(count_long))
+  if (length(missing_cols) > 0) {
+    stop("sim_result$count_long is missing columns: ", paste(missing_cols, collapse = ", "))
+  }
+
+  wide <- count_long %>%
+    dplyr::select("sample_id", "taxon_id", "count") %>%
+    tidyr::pivot_wider(names_from = "sample_id", values_from = "count", values_fill = 0)
+  taxa_ids <- wide$taxon_id
+  mat <- as.matrix(wide[, -1, drop = FALSE])
+  rownames(mat) <- taxa_ids
+  grp_tbl <- count_long %>%
+    dplyr::group_by(.data$sample_id) %>%
+    dplyr::summarise(group = dplyr::first(.data$group), .groups = "drop")
+  sample_order <- colnames(mat)
+  grp_ord <- grp_tbl[match(sample_order, grp_tbl$sample_id), , drop = FALSE]
+  if (anyNA(grp_ord$group)) {
+    stop("run_alpha_diversity_analysis_normalised(): could not resolve `group` for all samples.", call. = FALSE)
+  }
+  depth_each <- colSums(mat, na.rm = TRUE)
+  depth <- if (is.null(rarefy_sample)) min(depth_each, na.rm = TRUE) else rarefy_sample
+  if (!is.numeric(depth) || length(depth) != 1L || !is.finite(depth) || depth <= 0) {
+    stop("run_alpha_diversity_analysis_normalised(): invalid `rarefy_sample` / library size.", call. = FALSE)
+  }
+  if (any(depth_each < depth)) {
+    stop(
+      "run_alpha_diversity_analysis_normalised(): rarefaction depth (", depth,
+      ") exceeds total counts for at least one sample.",
+      call. = FALSE
+    )
+  }
+  col_df <- S4Vectors::DataFrame(group = factor(grp_ord$group, levels = gl))
+  rownames(col_df) <- sample_order
+  se <- SummarizedExperiment::SummarizedExperiment(assays = list(counts = mat), colData = col_df)
+  alpha_df <- mia::getAlpha(
+    se,
+    assay.type = "counts",
+    index = c("observed", "shannon", "pielou"),
+    niter = rarefy_niter,
+    sample = depth
+  )
+  alpha_data <- tibble::tibble(
+    sample_id = sample_order,
+    group = factor(grp_ord$group, levels = gl),
+    richness = as.numeric(alpha_df$observed),
+    shannon = as.numeric(alpha_df$shannon),
+    pielou_evenness = as.numeric(alpha_df$pielou)
+  )
+  plot_subtitle <- paste0(
+    "Rarefied (mia::getAlpha, niter = ", rarefy_niter, ", depth = ", depth, "); ",
+    "points = samples, ellipses = 95% CI"
   )
 
-  # Add tiny noise to help stat_ellipse when variance is extremely low
-  # (without noise, covariance matrix can be singular and ellipse fails silently)
-  set.seed(12345)  # Reproducible noise
-  alpha_data_jitter <- alpha_data %>%
-    dplyr::mutate(
-      richness_j = richness + stats::rnorm(dplyr::n(), 0, 0.01),
-      evenness_j = pielou_evenness + stats::rnorm(dplyr::n(), 0, 0.001)
-    )
-  
-  p <- ggplot2::ggplot(alpha_data, ggplot2::aes(x = richness, y = pielou_evenness, color = group)) +
-    ggplot2::geom_point(size = 0.1, alpha = 0.6, stroke = 0) +
-    # Use jittered data for ellipse calculation only
-    ggplot2::stat_ellipse(
-      data = alpha_data_jitter,
-      ggplot2::aes(x = richness_j, y = evenness_j, color = group),
-      level = 0.95, linewidth = 0.25, type = "norm"
-    ) +
-    ggplot2::scale_color_manual(values = group_colors) +
-    ggplot2::labs(
-      title = paste0("Alpha Diversity: Evenness vs Richness (", case_label, ")"),
-      subtitle = "Points = samples, Ellipses = 95% confidence intervals",
-      x = "Richness (# of observed taxa)",
-      y = "Pielou's Evenness",
-      color = "Group"
-    ) +
-    ggplot2::theme_minimal() +
-    ggplot2::theme(
-      plot.title = ggplot2::element_text(hjust = 0.5, size = 14, face = "bold"),
-      plot.subtitle = ggplot2::element_text(hjust = 0.5, size = 11),
-      legend.position = "bottom"
-    )
-
-  list(data = alpha_data, summary = summary_tbl, tests = tests, plot = p)
+  .alpha_diversity_table_to_plot(alpha_data, case_label, group_colors, plot_subtitle)
 }
 
 # =============================================================================
