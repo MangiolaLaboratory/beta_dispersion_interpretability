@@ -10,3 +10,8 @@ bd_benchmark_paper_analyses_cache/html/
 /bd_benchmark_paper_analyses_files
 /literature_beta_diversity_dispersion_openalex_cache
 /article_files
+HMP_2019_sccomp_results.rds
+HMP2_sccomp_results.rds
+ShaoY_2019_sccomp_results.rds
+_targets*
+*.rmarkdown
