@@ -648,16 +648,119 @@ coerce_method_levels <- function(x) {
 # format_analysis_results_for_plotting is defined in this QMD (plotting helper function)
 ```
 
-```{r download-sccomp-results-if-needed}
+```{r prepare-sccomp-results-if-needed}
 #| include: false
 #| cache: false
 
-# HMP2 sccomp fit from Zenodo (10.5281/zenodo.19144244)
+# HMP2 sccomp fit. Prefer rebuilding from local BIOM + metadata inputs so the
+# preprocessing is explicit and reproducible in this report.
 sccomp_file_path <- "HMP2_sccomp_results.rds"
 zenodo_url <- "https://zenodo.org/records/19144244/files/HMP2_sccomp_results.rds?download=1"
+biom_file <- "taxonomic_profiles.biom"
+meta_file <- "hmp2_metadata.csv"
 
 if (!file.exists(sccomp_file_path)) {
-  download.file(zenodo_url, sccomp_file_path, mode = "wb")
+  # Previous fallback:
+  # download.file(zenodo_url, sccomp_file_path, mode = "wb")
+
+  if (!file.exists(biom_file)) {
+    stop("Missing required HMP2 BIOM input: ", biom_file)
+  }
+  if (!file.exists(meta_file)) {
+    stop("Missing required HMP2 metadata input: ", meta_file)
+  }
+
+  suppressPackageStartupMessages({
+    library(phyloseq)
+    library(readr)
+  })
+
+  ps <- phyloseq::import_biom(biom_file)
+  meta <- readr::read_csv(meta_file, show_col_types = FALSE)
+
+  otu_mat <- as(phyloseq::otu_table(ps), "matrix")
+  if (!phyloseq::taxa_are_rows(ps)) {
+    otu_mat <- t(otu_mat)
+  }
+
+  otu_df <- as.data.frame(otu_mat) |>
+    tibble::rownames_to_column("taxa") |>
+    tidyr::pivot_longer(cols = -taxa, names_to = "sample", values_to = "count") |>
+    dplyr::mutate(count = as.integer(round(count)))
+
+  otu_df <- otu_df |>
+    dplyr::group_by(sample) |>
+    dplyr::filter(sum(count) > 0) |>
+    dplyr::ungroup()
+
+  nonzero_taxa <- otu_df |>
+    dplyr::group_by(taxa) |>
+    dplyr::summarise(nz = sum(count > 0), .groups = "drop") |>
+    dplyr::filter(nz > 0) |>
+    dplyr::pull(taxa)
+
+  otu_df <- otu_df |>
+    dplyr::filter(taxa %in% nonzero_taxa)
+
+  tax_df <- as.data.frame(phyloseq::tax_table(ps)) |>
+    tibble::rownames_to_column("taxa") |>
+    dplyr::mutate(Rank1 = as.character(Rank1))
+
+  extract_genus <- function(x) {
+    if (is.na(x) || x == "") {
+      return("Unclassified")
+    }
+    parts <- strsplit(x, ";", fixed = TRUE)[[1]]
+    parts <- trimws(parts)
+    if (length(parts) >= 6) {
+      parts[6]
+    } else {
+      NA_character_
+    }
+  }
+
+  tax_df <- tax_df |>
+    dplyr::mutate(Genus = vapply(Rank1, extract_genus, FUN.VALUE = character(1))) |>
+    dplyr::select(taxa, Genus)
+
+  otu_genus <- otu_df |>
+    dplyr::left_join(tax_df, by = "taxa") |>
+    dplyr::mutate(Genus = dplyr::if_else(is.na(Genus) | Genus == "", "Unclassified", Genus)) |>
+    dplyr::group_by(sample, Genus) |>
+    dplyr::summarise(count = sum(count), .groups = "drop")
+
+  meta_norm <- meta |>
+    dplyr::mutate(sample = trimws(as.character(`External ID`))) |>
+    dplyr::filter(sample %in% phyloseq::sample_names(ps))
+
+  sccomp_input_genus <- otu_genus |>
+    dplyr::left_join(meta_norm, by = "sample") |>
+    dplyr::rename(cell_group = Genus) |>
+    dplyr::mutate(count = as.integer(count)) |>
+    dplyr::relocate(sample, cell_group, count) |>
+    dplyr::mutate(cell_group = stringr::str_replace(cell_group, "^_+", ""))
+
+  group_df <- sccomp_input_genus |>
+    dplyr::distinct(sample, diagnosis) |>
+    dplyr::mutate(group = ifelse(diagnosis %in% c("CD", "UC"), "IBD", "Healthy")) |>
+    dplyr::mutate(group = factor(group, levels = c("Healthy", "IBD")))
+
+  sccomp_input_genus <- sccomp_input_genus |>
+    dplyr::left_join(group_df |> dplyr::select(sample, group), by = "sample")
+
+  result <- sccomp::sccomp_estimate(
+    .data = sccomp_input_genus,
+    formula_composition = ~ 1 + group,
+    formula_variability = ~ 1 + group,
+    sample = "sample",
+    cell_group = "cell_group",
+    abundance = "count",
+    inference_method = "hmc",
+    bimodal_mean_variability_association = TRUE,
+    pass_fit = TRUE
+  )
+
+  saveRDS(result, sccomp_file_path)
 }
 ```
 
@@ -767,7 +870,7 @@ annotate_hmp2_sim_groups <- function(sim_r) {
 list(
   tar_target(
     sccomp_result_file,
-    "/vast/projects/mangiola_immune_map/labHead/beta_dispersion_interpretability/HMP2_sccomp_results.rds",
+    "HMP2_sccomp_results.rds",
     format = "file"
   ),
   tar_target(
