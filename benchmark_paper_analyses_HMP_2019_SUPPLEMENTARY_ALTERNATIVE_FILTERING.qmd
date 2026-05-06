@@ -1,0 +1,253 @@
+---
+title: "HMP_2019 supplementary p_figure3 thresholds"
+subtitle: "Setting DA_no_sd at 0.5% filter and unfiltered"
+author: "Mangiola Laboratory"
+date: today
+format:
+  html:
+    toc: true
+    code-fold: true
+    code-tools: true
+execute:
+  warning: false
+  message: false
+  fig.path: "HMP_2019_paper_figures/"
+---
+
+## Setup
+
+```{r setup}
+#| include: false
+library(dplyr)
+library(ggplot2)
+library(vegan)
+library(patchwork)
+library(RColorBrewer)
+library(stringr)
+
+source("functions.R")
+
+knitr::opts_chunk$set(
+  fig.path = "HMP_2019_paper_figures/",
+  dpi = 220
+)
+
+theme_multipanel <-
+  theme_bw() +
+  theme(
+    panel.border = element_blank(),
+    axis.line = element_line(linewidth = 0.25),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    strip.background = element_blank(),
+    axis.title.y = element_text(size = 7),
+    axis.title.x = element_text(size = 7),
+    axis.text.x = element_text(size = 6),
+    axis.text.y = element_text(size = 6),
+    strip.text.x = element_text(size = 7),
+    strip.text.y = element_text(size = 7),
+    legend.key.size = unit(5, "mm"),
+    legend.title = element_text(size = 7),
+    legend.text = element_text(size = 6)
+  )
+
+cols_prgn_base <- c(
+  "non-IBD" = RColorBrewer::brewer.pal(11, "PRGn")[10],
+  "IBD" = RColorBrewer::brewer.pal(11, "PRGn")[2]
+)
+
+format_axis_labels <- function(x) {
+  formatted <- signif(x, 2)
+  out <- ifelse(is.na(formatted), "NA", as.character(formatted))
+  out <- stringr::str_replace(out, "(\\.\\d*?)0+$", "\\1")
+  out <- stringr::str_replace(out, "\\.$", "")
+  out
+}
+```
+
+```{r targets-load}
+targets_script <- file.path(getwd(), "_targets_HMP_2019.R")
+targets_store <- "_targets_HMP_2019"
+if (!file.exists(targets_script)) {
+  qmd_dir <- dirname(knitr::current_input(dir = TRUE))
+  targets_script <- file.path(qmd_dir, "_targets_HMP_2019.R")
+}
+if (!file.exists(targets_script)) {
+  targets_script <- file.path(getwd(), "_targets.R")
+  targets_store <- "_targets"
+}
+if (!file.exists(targets_script)) {
+  qmd_dir <- dirname(knitr::current_input(dir = TRUE))
+  targets_script <- file.path(qmd_dir, "_targets.R")
+  targets_store <- "_targets"
+}
+if (!file.exists(targets_script)) {
+  stop("Could not find _targets_HMP_2019.R or _targets.R")
+}
+source(targets_script)
+
+sim_params <- targets::tar_read("sim_params", store = targets_store)
+n_samples <- sim_params$n_samples
+n_taxa <- sim_params$n_taxa
+```
+
+```{r helpers}
+plot_da_taxa_sweep_results <- function(fpr_data, threshold_label_for_title) {
+  standard_methods_labels <- method_levels
+  fpr_data_with_labels <- fpr_data %>%
+    dplyr::mutate(method_label = dplyr::case_when(
+      method == "permdisp_bray" ~ "Bray–Curtis",
+      method == "permdisp_aitchison" ~ "Aitchison",
+      method == "permdisp_robust.aitchison" ~ "robust Aitchison",
+      method == "permdisp_robust_aitchison" ~ "robust Aitchison",
+      method == "permdisp_jaccard" ~ "Jaccard",
+      method == "permdisp_hellinger" ~ "Hellinger",
+      as.character(method) %in% standard_methods_labels ~ as.character(method),
+      TRUE ~ NA_character_
+    )) %>%
+    dplyr::filter(!is.na(method_label)) %>%
+    dplyr::mutate(method_label = coerce_method_levels(method_label))
+
+  fpr_col <- if ("FPR" %in% names(fpr_data_with_labels)) "FPR" else "fpr"
+
+  ggplot(fpr_data_with_labels, aes(x = n_da_taxa, y = !!rlang::sym(fpr_col), color = method_label)) +
+    geom_hline(yintercept = 0.05, linetype = "dashed", color = "grey60", linewidth = 0.2) +
+    geom_line(linewidth = 0.3) +
+    geom_point(size = 1.0, stroke = 0) +
+    scale_color_manual(values = roc_colors_all, breaks = standard_methods_labels, drop = FALSE, name = NULL) +
+    scale_x_continuous(labels = format_axis_labels) +
+    scale_y_continuous(labels = format_axis_labels, limits = c(0, 1)) +
+    labs(
+      title = paste0("Setting DA_no_sd (", threshold_label_for_title, ", n=", n_samples, ", p=", n_taxa, ")"),
+      x = "Number of DA taxa",
+      y = "False positive rate"
+    ) +
+    theme_multipanel
+}
+
+plot_pcoa_single_method <- function(analysis_result, method_key, n_da_label, is_first_col, is_first_row, is_last_row, method_label = NULL) {
+  if (is.null(analysis_result) || is.null(analysis_result$bd_by_method)) return(NULL)
+  bd <- analysis_result$bd_by_method[[method_key]]
+  if (is.null(bd)) return(NULL)
+
+  p_val <- analysis_result$stats %>%
+    dplyr::filter(method == method_key) %>%
+    dplyr::pull(p_value)
+  if (length(p_val) == 0) p_val <- NA_real_
+
+  if (is.null(method_label)) method_label <- pretty_method_label_box(method_key)
+
+  gg <- plot_betadisper_pcoa_and_boxplot(
+    bd,
+    title_prefix = "",
+    cols = cols_prgn_base,
+    p_value = p_val,
+    show_group_legend = FALSE,
+    horizontal_box = FALSE
+  )
+
+  p <- gg$pcoa
+  if (is_first_row) {
+    p <- p + ggtitle(n_da_label) + theme(plot.title = element_text(size = 8, hjust = 0.5, face = "bold"))
+  } else {
+    p <- p + theme(plot.title = element_blank())
+  }
+  if (is_first_col) {
+    p <- p + annotate("text", x = -Inf, y = Inf, label = method_label, angle = 90, hjust = -0.1, vjust = 1.4, size = 2.8, fontface = "bold")
+  }
+  if (!is_first_col) p <- p + theme(axis.title.y = element_blank())
+  if (!is_last_row) p <- p + theme(axis.title.x = element_blank())
+  p
+}
+
+plot_pcoa_grid_multiple_methods <- function(analysis_list, n_da_labels) {
+  methods <- paste0("permdisp_", c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger"))
+  all_plots <- list()
+  for (method_idx in seq_along(methods)) {
+    method <- methods[method_idx]
+    for (col_idx in seq_along(analysis_list)) {
+      p <- plot_pcoa_single_method(
+        analysis_result = analysis_list[[col_idx]],
+        method_key = method,
+        n_da_label = n_da_labels[col_idx],
+        is_first_col = (col_idx == 1),
+        is_first_row = (method_idx == 1),
+        is_last_row = (method_idx == length(methods)),
+        method_label = pretty_method_label_box(method)
+      )
+      if (!is.null(p)) all_plots[[length(all_plots) + 1]] <- p
+    }
+  }
+  patchwork::wrap_plots(all_plots, nrow = length(methods), ncol = length(analysis_list), byrow = TRUE) +
+    patchwork::plot_layout(guides = "collect") &
+    theme(legend.position = "bottom")
+}
+
+get_sweep_index_with_threshold <- function(jobs_with_threshold, seed, n_da_taxa, threshold) {
+  idx <- which(
+    jobs_with_threshold$seed == seed &
+      jobs_with_threshold$n_da_taxa == n_da_taxa &
+      jobs_with_threshold$threshold == threshold
+  )
+  if (length(idx) != 1) {
+    stop("Expected one job for seed=", seed, " n_da_taxa=", n_da_taxa, " threshold=", threshold)
+  }
+  idx
+}
+```
+
+```{r build-threshold-figures, fig.width=16, fig.height=16}
+sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs", store = targets_store)
+sweep_setting_DA_no_sd_jobs_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_jobs_with_threshold", store = targets_store)
+fpr_setting_DA_no_sd_all <- targets::tar_read("sweep_setting_DA_no_sd_fpr", store = targets_store)
+
+available_seeds <- unique(sweep_setting_DA_no_sd_jobs$seed)
+seed_for_panels <- available_seeds[min(2, length(available_seeds))]
+
+make_supp_p_figure3 <- function(threshold, threshold_title, out_file) {
+  analysis_1 <- format_analysis_results_for_plotting(
+    targets::tar_read(
+      "sweep_setting_DA_no_sd_res",
+      branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_for_panels, 1, threshold),
+      store = targets_store
+    )[[1]],
+    case_label = "1 DA"
+  )
+  analysis_20 <- format_analysis_results_for_plotting(
+    targets::tar_read(
+      "sweep_setting_DA_no_sd_res",
+      branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_for_panels, 20, threshold),
+      store = targets_store
+    )[[1]],
+    case_label = "20 DA"
+  )
+  analysis_40 <- format_analysis_results_for_plotting(
+    targets::tar_read(
+      "sweep_setting_DA_no_sd_res",
+      branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_for_panels, 40, threshold),
+      store = targets_store
+    )[[1]],
+    case_label = "40 DA"
+  )
+
+  pcoa_panel <- plot_pcoa_grid_multiple_methods(
+    analysis_list = list(analysis_1, analysis_20, analysis_40),
+    n_da_labels = c("1", "20", "40")
+  )
+
+  fpr_this <- fpr_setting_DA_no_sd_all %>%
+    dplyr::filter(.data$threshold == threshold)
+  p_sweep <- plot_da_taxa_sweep_results(fpr_this, threshold_label_for_title = threshold_title)
+
+  fig_supp <- (p_sweep | pcoa_panel) +
+    patchwork::plot_layout(guides = "collect", widths = c(1, 1)) &
+    theme(plot.margin = margin(0, 0, 0, 0, "pt"), legend.key.size = unit(0.2, "cm"), legend.position = "bottom")
+
+  print(fig_supp)
+  ggsave(out_file, fig_supp, width = 183, height = 140, units = "mm")
+}
+
+make_supp_p_figure3(0.005, "0.5% filtered", "Supp_p_Figure_3_HMP_2019_threshold_0p005.pdf")
+make_supp_p_figure3(0.0, "unfiltered", "Supp_p_Figure_3_HMP_2019_unfiltered.pdf")
+```
