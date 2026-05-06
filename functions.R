@@ -2360,28 +2360,44 @@ extract_sccomp_params <- function(result) {
   prec_sd_summary <- fit$summary("prec_sd")
   prec_sd_real <- prec_sd_summary$mean[1]
 
+  # sccomp_tbl parameter names differ by model/version: "(Intercept)" vs "Intercept".
+  intercept_param <- if (any(result$parameter == "(Intercept)", na.rm = TRUE)) {
+    "(Intercept)"
+  } else {
+    "Intercept"
+  }
+
   intercept_effects <- result %>%
-    filter(.data$parameter == "(Intercept)") %>%
-    pull(.data$c_effect)
+    dplyr::filter(.data$parameter == intercept_param) %>%
+    dplyr::pull(.data$c_effect)
+
+  group_parameter <- result %>%
+    dplyr::filter(!.data$parameter %in% c("(Intercept)", "Intercept")) %>%
+    dplyr::distinct(.data$parameter) %>%
+    dplyr::pull(.data$parameter)
+  if (length(group_parameter) < 1L || any(is.na(group_parameter))) {
+    stop("Could not identify non-intercept group parameter in sccomp result.")
+  }
+  group_parameter <- group_parameter[[1]]
 
   slope_effects <- result %>%
-    filter(.data$parameter == "groupIBD") %>%
-    pull(.data$c_effect)
+    dplyr::filter(.data$parameter == group_parameter) %>%
+    dplyr::pull(.data$c_effect)
 
   slope_data <- result %>%
-    filter(.data$parameter == "groupIBD")
+    dplyr::filter(.data$parameter == group_parameter)
 
   slope_effects_significant <- slope_data %>%
     filter(.data$c_lower > 0 | .data$c_upper < 0) %>%
     pull(.data$c_effect)
 
   v_intercept <- result %>%
-    filter(.data$parameter == "(Intercept)") %>%
-    pull(.data$v_effect)
+    dplyr::filter(.data$parameter == intercept_param) %>%
+    dplyr::pull(.data$v_effect)
 
   v_slope <- result %>%
-    filter(.data$parameter == "groupIBD") %>%
-    pull(.data$v_effect)
+    dplyr::filter(.data$parameter == group_parameter) %>%
+    dplyr::pull(.data$v_effect)
 
   list(
     n_samples_real = n_samples_real,
