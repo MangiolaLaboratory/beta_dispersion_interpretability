@@ -67,25 +67,10 @@ format_axis_labels <- function(x) {
 ```
 
 ```{r targets-load}
-targets_script <- file.path(getwd(), "_targets_HMP_2019.R")
-targets_store <- "_targets_HMP_2019"
-if (!file.exists(targets_script)) {
-  qmd_dir <- dirname(knitr::current_input(dir = TRUE))
-  targets_script <- file.path(qmd_dir, "_targets_HMP_2019.R")
-}
-if (!file.exists(targets_script)) {
-  targets_script <- file.path(getwd(), "_targets.R")
-  targets_store <- "_targets"
-}
-if (!file.exists(targets_script)) {
-  qmd_dir <- dirname(knitr::current_input(dir = TRUE))
-  targets_script <- file.path(qmd_dir, "_targets.R")
-  targets_store <- "_targets"
-}
-if (!file.exists(targets_script)) {
-  stop("Could not find _targets_HMP_2019.R or _targets.R")
-}
-source(targets_script)
+library(targets)
+ 
+targets_store = "_targets_HMP_2019/"
+targets_script = "_targets_HMP_2019.R"
 
 sim_params <- targets::tar_read("sim_params", store = targets_store)
 n_samples <- sim_params$n_samples
