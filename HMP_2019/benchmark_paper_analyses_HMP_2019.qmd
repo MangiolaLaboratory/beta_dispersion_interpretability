@@ -516,13 +516,14 @@ format_analysis_results_for_plotting <- function(
 
 plot_alpha_diversity_scatter <- function(sim_result, case_label = "Case") {
   # This is the same style used in the discovery report:
-  # `print(alpha_1$plot)` from `run_alpha_diversity_analysis()`.
+  # `print(alpha_1$plot)` from `run_alpha_diversity_analysis_normalised()`.
   # HMP2: two disease groups (hardcoded for this QMD only).
   alpha <- run_alpha_diversity_analysis_normalised(
     sim_result,
     case_label = case_label,
     group_levels = c("non-IBD", "IBD"),
-    group_colors = cols_prgn_base
+    group_colors = cols_prgn_base,
+    rarefy_niter = 50
   )
   color_vals <- cols_prgn_base
   # Update plot to use theme_multipanel and remove titles/subtitles
@@ -3194,28 +3195,28 @@ invisible(gc())
 
 # Format analysis results for plotting
 analysis_DA_no_sd_1 <- format_analysis_results_for_plotting(
-  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_1_da, store = here("HMP_2019/_targets_HMP_2019")),
+  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_1_da, store = here("HMP_2019/_targets_HMP_2019"))[[1]],
   case_label = "1 DA"
 )
 analysis_DA_no_sd_20 <- format_analysis_results_for_plotting(
-  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_20_da, store = here("HMP_2019/_targets_HMP_2019")),
+  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_20_da, store = here("HMP_2019/_targets_HMP_2019"))[[1]],
   case_label = "20 DA"
 )
 analysis_DA_no_sd_40 <- format_analysis_results_for_plotting(
-  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_40_da, store = here("HMP_2019/_targets_HMP_2019")),
+  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_40_da, store = here("HMP_2019/_targets_HMP_2019"))[[1]],
   case_label = "40 DA"
 )
 
 analysis_DA_sd_1 <- format_analysis_results_for_plotting(
-  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_1_da, store = here("HMP_2019/_targets_HMP_2019")),
+  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_1_da, store = here("HMP_2019/_targets_HMP_2019"))[[1]],
   case_label = "1 DA"
 )
 analysis_DA_sd_20 <- format_analysis_results_for_plotting(
-  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_20_da, store = here("HMP_2019/_targets_HMP_2019")),
+  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_20_da, store = here("HMP_2019/_targets_HMP_2019"))[[1]],
   case_label = "20 DA"
 )
 analysis_DA_sd_40 <- format_analysis_results_for_plotting(
-  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_40_da, store = here("HMP_2019/_targets_HMP_2019")),
+  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_40_da, store = here("HMP_2019/_targets_HMP_2019"))[[1]],
   case_label = "40 DA"
 )
 

@@ -511,13 +511,14 @@ format_analysis_results_for_plotting <- function(
 
 plot_alpha_diversity_scatter <- function(sim_result, case_label = "Case") {
   # This is the same style used in the discovery report:
-  # `print(alpha_1$plot)` from `run_alpha_diversity_analysis()`.
+  # `print(alpha_1$plot)` from `run_alpha_diversity_analysis_normalised()`.
   # ShaoY_2019: mother vs child (hardcoded for this QMD only).
-  alpha <- run_alpha_diversity_analysis(
+  alpha <- run_alpha_diversity_analysis_normalised(
     sim_result,
     case_label = case_label,
     group_levels = c("mother", "child"),
-    group_colors = cols_prgn_base
+    group_colors = cols_prgn_base,
+    rarefy_niter = 50
   )
   color_vals <- cols_prgn_base
   # Update plot to use theme_multipanel and remove titles/subtitles
