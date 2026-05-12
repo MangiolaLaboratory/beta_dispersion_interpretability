@@ -1,0 +1,1739 @@
+---
+title: "Zeller et al. 2014 (CRC) validation analysis"
+subtitle: "Observed beta dispersion versus sccomp simulations with differential abundance switched off"
+author: "Mangiola Laboratory"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    code-tools: true
+    fig-width: 10
+    fig-height: 8
+    theme: cosmo
+execute:
+  warning: false
+  message: false
+  fig.path: "zellerg_2014_validation_figures/"
+params:
+  group_variable: "study_condition"
+  group_levels: ["control", "CRC"]
+  group_labels: ["Control", "CRC"]
+  body_site_levels: ["stool"]
+  n_reps_null: 40
+  n_permutations_observed: 999
+  n_permutations_permanova: 199
+  n_permutations_null: 999
+  abundance_threshold: 0.001
+---
+
+## Overview
+
+The Anna Karenina Principle (AKP) interpretation, popularised by
+Zaneveld et al. (2017), claims that diseased or perturbed states are
+more variable in community composition than healthy reference states,
+typically supported by PERMDISP. This report extends our central
+critique to a canonical disease cohort: the Zeller et al. (2014)
+metagenomic colorectal cancer (CRC) study, accessed via
+`curatedMetagenomicData`. CRC versus healthy stool is one of the
+most-cited perturbation contrasts where increased beta dispersion has
+been claimed.
+
+This report:
+
+1. Reproduces an observed PERMDISP comparison in the Zeller et al. CRC
+   stool data (CRC vs control).
+2. Fits a generative `sccomp` model to the same contrast with
+   non-interest covariates (`age_category`, `gender`).
+3. Simulates matched datasets under two null scenarios:
+   - **No DA, No DD**: differential abundance and group differential
+     dispersion both switched off (the formal null for PERMDISP).
+   - **No DA, Yes DD**: differential abundance switched off but
+     fitted taxon-level group differential dispersion preserved.
+4. Re-runs the same PERMDISP workflow on each set of simulations.
+5. Compares the observed beta-dispersion effect with the DA-off null
+   distribution.
+
+```{r setup}
+#| include: false
+
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(purrr)
+library(ggplot2)
+library(vegan)
+library(parallelly)
+library(patchwork)
+library(stringr)
+library(sccomp)
+
+source("../functions.R")
+
+knitr::opts_chunk$set(
+  fig.path = "zellerg_2014_validation_figures/",
+  dpi = 220
+)
+
+theme_validation <-
+  theme_bw() +
+  theme(
+    panel.border = element_blank(),
+    axis.line = element_line(linewidth = 0.25),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    strip.background = element_blank()
+  )
+
+# Compatibility shim for tidybulk::scale_y_log10_reverse() on ggplot2/scales
+# versions that look up a named `log10_reverse` transform at render time.
+log10_reverse_trans <- function() {
+  scales::trans_new(
+    name = "log10_reverse",
+    transform = function(x) -log10(pmax(x, .Machine$double.xmin)),
+    inverse = function(x) 10^(-x)
+  )
+}
+transform_log10_reverse <- log10_reverse_trans
+
+standard_distance_methods <- c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
+group_levels <- unlist(params$group_levels)
+group_labels <- unlist(params$group_labels)
+if (length(group_levels) != 2L || length(group_labels) != 2L) {
+  stop("params$group_levels and params$group_labels must both have length 2.")
+}
+names(group_labels) <- group_levels
+
+sccomp_file_path <- "ZellerG_2014_sccomp_results.rds"
+
+# Robust Stan bytecode cache under this quarto folder. The package default cache
+# can live on flaky cloud-sync volumes and occasionally fails `gzfile()` when
+# writing compiled models during knit.
+sccomp_stan_cache_dir <- file.path(normalizePath("."), "_sccomp_stan_model_cache")
+dir.create(sccomp_stan_cache_dir, showWarnings = FALSE, recursive = TRUE)
+```
+
+## Data Preparation
+
+```{r data-preparation}
+#| cache: false
+
+suppressPackageStartupMessages({
+  library(curatedMetagenomicData)
+  library(TreeSummarizedExperiment)
+  library(SummarizedExperiment)
+  library(S4Vectors)
+  library(mia)
+  library(magrittr)
+})
+
+pick_existing_column <- function(dat, candidates, required = TRUE, label = "column") {
+  hit <- intersect(candidates, colnames(dat))
+  if (length(hit) > 0L) {
+    return(hit[[1L]])
+  }
+  hit_lower <- match(tolower(candidates), tolower(colnames(dat)), nomatch = 0L)
+  hit_lower <- hit_lower[hit_lower > 0L]
+  if (length(hit_lower) > 0L) {
+    return(colnames(dat)[[hit_lower[[1L]]]])
+  }
+  if (required) {
+    stop(
+      "Could not find ", label, ". Tried: ",
+      paste(candidates, collapse = ", "),
+      "\nAvailable columns: ",
+      paste(colnames(dat), collapse = ", ")
+    )
+  }
+  NULL
+}
+
+normalise_text <- function(x) {
+  tolower(gsub("[^A-Za-z0-9]+", "_", trimws(as.character(x))))
+}
+
+as_count_long <- function(tse, assay_name) {
+  count_matrix <- SummarizedExperiment::assay(tse, assay_name)
+  count_matrix <- as.matrix(count_matrix)
+  storage.mode(count_matrix) <- "numeric"
+  if (is.null(rownames(count_matrix))) {
+    rownames(count_matrix) <- paste0("taxon_", seq_len(nrow(count_matrix)))
+  }
+  if (is.null(colnames(count_matrix))) {
+    colnames(count_matrix) <- paste0("sample_", seq_len(ncol(count_matrix)))
+  }
+
+  as.data.frame(count_matrix, check.names = FALSE) |>
+    tibble::rownames_to_column("taxon_id") |>
+    tidyr::pivot_longer(
+      cols = -taxon_id,
+      names_to = "sample_id",
+      values_to = "count"
+    ) |>
+  dplyr::mutate(
+    count = if (all(abs(.data$count - round(.data$count)) < .Machine$double.eps^0.5, na.rm = TRUE)) {
+      as.integer(round(.data$count))
+    } else {
+      as.numeric(.data$count)
+    }
+  )
+}
+
+# curatedMetagenomicData returns counts when counts = TRUE, even though the
+# assay slot is named "relative_abundance".
+tse_raw <- curatedMetagenomicData::curatedMetagenomicData(
+  "ZellerG_2014.relative_abundance",
+  dryrun = FALSE,
+  counts = TRUE
+)[[1L]]
+
+assay_name <- SummarizedExperiment::assayNames(tse_raw)[[1L]]
+assay_preview <- as.matrix(SummarizedExperiment::assay(tse_raw, assay_name))
+is_relative_abundance_assay <- max(assay_preview, na.rm = TRUE) <= 1
+detection_threshold <- if (is_relative_abundance_assay) 1e-4 else 10L
+
+metadata_raw <- as.data.frame(SummarizedExperiment::colData(tse_raw)) |>
+  tibble::rownames_to_column("sample_id") |>
+  dplyr::mutate(across(where(is.character), trimws))
+
+body_site_col <- pick_existing_column(
+  metadata_raw,
+  c("body_site", "Sample_Type", "body_site_name", "sample_type", "SampleType", "site"),
+  required = FALSE,
+  label = "body-site column"
+)
+
+group_variable <- params$group_variable
+if (!group_variable %in% colnames(metadata_raw)) {
+  stop(
+    "Requested params$group_variable = '", group_variable, "' was not found in colData.\n",
+    "Available columns: ", paste(colnames(metadata_raw), collapse = ", ")
+  )
+}
+
+metadata_prepared <- metadata_raw |>
+  dplyr::mutate(
+    group_raw = normalise_text(.data[[group_variable]]),
+    group = dplyr::case_when(
+      group_raw == normalise_text(group_levels[[1L]]) ~ group_levels[[1L]],
+      group_raw == normalise_text(group_levels[[2L]]) ~ group_levels[[2L]],
+      TRUE ~ NA_character_
+    ),
+    group = factor(.data$group, levels = group_levels)
+  )
+
+if (!is.null(body_site_col)) {
+  body_site_keep <- normalise_text(unlist(params$body_site_levels))
+  metadata_prepared <- metadata_prepared |>
+    dplyr::filter(normalise_text(.data[[body_site_col]]) %in% body_site_keep)
+}
+
+metadata_prepared <- metadata_prepared |>
+  dplyr::filter(!is.na(.data$group)) |>
+  dplyr::mutate(group_label = factor(group_labels[as.character(.data$group)], levels = group_labels))
+
+if (nrow(metadata_prepared) == 0L) {
+  stop(
+    "No ZellerG_2014 samples remained after applying group/body-site filters. ",
+    "Check params$group_variable, params$group_levels, and params$body_site_levels."
+  )
+}
+
+sample_keep <- metadata_prepared$sample_id
+tse <- tse_raw[, sample_keep]
+
+n_taxa_before <- nrow(tse)
+tse <- mia::subsetByPrevalent(
+  tse,
+  detection = detection_threshold,
+  prevalence = 0.10,
+  assay.type = assay_name
+)
+n_taxa_after <- nrow(tse)
+
+count_long <- as_count_long(tse, assay_name) |>
+  dplyr::filter(.data$sample_id %in% metadata_prepared$sample_id) |>
+  dplyr::group_by(.data$sample_id) |>
+  dplyr::mutate(library_size = sum(.data$count, na.rm = TRUE)) |>
+  dplyr::ungroup()
+
+sample_metadata <- metadata_prepared |>
+  dplyr::filter(.data$sample_id %in% unique(count_long$sample_id)) |>
+  dplyr::select(sample_id, group, group_label, dplyr::everything())
+
+count_long <- count_long |>
+  dplyr::inner_join(sample_metadata |> dplyr::select(sample_id, group), by = "sample_id")
+
+count_long_analysis <- filter_by_abundance_cases(
+  count_long,
+  threshold = params$abundance_threshold
+)
+
+cat("ZellerG_2014 input prepared.\n")
+cat("Assay:", assay_name, "\n")
+cat("Prevalence-filter detection threshold:", detection_threshold, "\n")
+cat("Samples:", dplyr::n_distinct(sample_metadata$sample_id), "\n")
+cat("Taxa before/after prevalence filter:", n_taxa_before, "/", n_taxa_after, "\n")
+cat("Taxa after abundance filter:", dplyr::n_distinct(count_long_analysis$taxon_id), "\n")
+print(sample_metadata |> dplyr::count(group_label, name = "n_samples"))
+```
+
+## Observed PERMDISP
+
+```{r observed-permdisp}
+
+run_betadisper_table <- function(count_long, sample_metadata, group_levels, permutations) {
+  inputs <- purrr::set_names(
+    lapply(standard_distance_methods, function(dm) {
+      build_standard_betadisper_inputs_paper(
+        count_long = count_long,
+        sample_metadata = sample_metadata,
+        distance_method = dm,
+        group_levels = group_levels
+      )
+    }),
+    nm = paste0("permdisp_", standard_distance_methods)
+  )
+
+  purrr::imap_dfr(inputs, function(inp, method_key) {
+    bd <- vegan::betadisper(inp$dist, inp$group)
+    pt <- permutest_betadisper_fixed(bd, permutations = permutations)
+    dist_df <- tibble::tibble(
+      group = bd$group,
+      distance_to_centroid = unname(bd$distances)
+    )
+    group_means <- dist_df |>
+      dplyr::group_by(.data$group) |>
+      dplyr::summarise(mean_distance = mean(.data$distance_to_centroid), .groups = "drop")
+
+    tibble::tibble(
+      method_key = method_key,
+      method = pretty_method_label(method_key),
+      reference_group = group_levels[[1L]],
+      focal_group = group_levels[[2L]],
+      reference_mean_distance = group_means$mean_distance[group_means$group == group_levels[[1L]]],
+      focal_mean_distance = group_means$mean_distance[group_means$group == group_levels[[2L]]],
+      dispersion_delta = focal_mean_distance - reference_mean_distance,
+      p_value = pt$p_value,
+      n_perm = pt$n_perm,
+      bd = list(bd),
+      distances = list(dist_df)
+    )
+  })
+}
+
+observed_permdisp <- run_betadisper_table(
+  count_long = count_long_analysis,
+  sample_metadata = sample_metadata,
+  group_levels = group_levels,
+  permutations = params$n_permutations_observed
+)
+
+observed_permdisp |>
+  dplyr::select(method, reference_mean_distance, focal_mean_distance, dispersion_delta, p_value, n_perm) |>
+  dplyr::arrange(p_value) |>
+  knitr::kable(digits = 4)
+```
+
+```{r observed-permdisp-plot}
+#| fig-cap: "Observed ZellerG_2014 distances to group centroid. Positive deltas indicate greater beta dispersion in CRC than in controls."
+
+observed_distances <- observed_permdisp |>
+  dplyr::select(method, distances) |>
+  tidyr::unnest(distances) |>
+  dplyr::mutate(group_label = factor(group_labels[as.character(.data$group)], levels = group_labels))
+
+observed_permdisp_boxplot <- ggplot(observed_distances, aes(x = group_label, y = distance_to_centroid, fill = group_label)) +
+  geom_boxplot(outlier.alpha = 0.25, width = 0.65) +
+  facet_wrap(~ method, scales = "free_y") +
+  labs(x = NULL, y = "Distance to group centroid", fill = NULL) +
+  theme_validation
+
+observed_permdisp_boxplot
+
+ggplot2::ggsave(
+  filename = "observed_permdisp_boxplot.pdf",
+  plot = observed_permdisp_boxplot,
+  width = 12,
+  height = 7,
+  units = "in",
+  device = grDevices::cairo_pdf,
+  dpi = 320
+)
+```
+
+## PERMANOVA Context
+
+```{r observed-permanova}
+
+run_permanova_table <- function(count_long, sample_metadata, group_levels, permutations) {
+  purrr::map_dfr(c("bray"), function(dm) {
+    inp <- build_standard_betadisper_inputs_paper(
+      count_long = count_long,
+      sample_metadata = sample_metadata,
+      distance_method = dm,
+      group_levels = group_levels
+    )
+    group <- inp$group
+    ad <- vegan::adonis2(inp$dist ~ group, permutations = permutations)
+    tibble::tibble(
+      method = pretty_method_label(dm),
+      r2 = ad$R2[[1L]],
+      p_value = ad$`Pr(>F)`[[1L]]
+    )
+  })
+}
+
+observed_permanova <- run_permanova_table(
+  count_long = count_long_analysis,
+  sample_metadata = sample_metadata,
+  group_levels = group_levels,
+  permutations = params$n_permutations_permanova
+)
+
+observed_permanova |>
+  dplyr::arrange(p_value) |>
+  knitr::kable(digits = 4)
+```
+
+## sccomp Model
+
+```{r fit-sccomp-zeller-if-needed}
+#| cache: false
+
+metadata_for_fit <- sample_metadata |>
+  dplyr::mutate(
+    sccomp_sample_id = .data$sample_id,
+    group = factor(.data$group, levels = group_levels)
+  )
+
+count_wide <- count_long |>
+  dplyr::select(sample_id, taxon_id, count) |>
+  tidyr::pivot_wider(names_from = taxon_id, values_from = count, values_fill = 0)
+
+sccomp_input <- count_wide |>
+  tidyr::pivot_longer(
+    cols = -sample_id,
+    names_to = "taxon_id",
+    values_to = "count"
+  ) |>
+  dplyr::left_join(metadata_for_fit, by = "sample_id")
+
+candidate_covariates <- c("age_category", "gender")
+covariates <- unlist(
+  lapply(candidate_covariates, function(column) {
+    pick_existing_column(sccomp_input, column, required = FALSE)
+  }),
+  use.names = FALSE
+)
+covariates <- unique(covariates[!is.na(covariates)])
+covariates <- covariates[vapply(sccomp_input[covariates], function(x) {
+  dplyr::n_distinct(x[!is.na(x)]) > 1L && dplyr::n_distinct(x[!is.na(x)]) < nrow(metadata_for_fit)
+}, logical(1))]
+
+composition_terms <- c("group", covariates)
+formula_composition <- stats::as.formula(paste("~", paste(composition_terms, collapse = " + ")))
+formula_variability <- ~ group
+
+message("sccomp composition formula: ", deparse(formula_composition))
+message("sccomp variability formula: ", deparse(formula_variability))
+
+if (!file.exists(sccomp_file_path)) {
+  fit <- sccomp_input |>
+    sccomp::sccomp_estimate(
+      formula_composition = formula_composition,
+      formula_variability = formula_variability,
+      sample = "sample_id",
+      cell_group = "taxon_id",
+      abundance = "count",
+      inference_method = "hmc",
+      cores = max(1, parallelly::availableCores() - 1),
+      bimodal_mean_variability_association = TRUE,
+      verbose = TRUE,
+      max_sampling_iterations = 3000,
+      sig_figs = 6,
+      portable = FALSE,
+      cache_stan_model = sccomp_stan_cache_dir,
+      exclude_mean_variability_association = TRUE
+    ) |>
+    sccomp::sccomp_test(contrasts = c("Intercept" = "`(Intercept)`", paste0("group", group_levels[[2L]])))
+
+  fit <- fit |>
+    sccomp:::incorporate_parameters_into_sccomp_object(
+      parameters_to_load = c(
+        "prec_intercept_1",
+        "prec_slope_1",
+        "prec_intercept_2",
+        "prec_slope_2",
+        "prec_sd",
+        "mix_p",
+        "beta",
+        "alpha"
+      )
+    )
+
+  saveRDS(fit, sccomp_file_path)
+} else {
+  message("Using existing sccomp fit: ", sccomp_file_path)
+}
+
+fit <- readRDS(sccomp_file_path)
+```
+
+```{r sccomp-qc}
+#| fig-cap: "Per-taxon (c_effect, v_effect) posterior for the original Zeller fit. Left panel: Intercept (baseline taxon-level log-odds abundance vs baseline log-precision). Right panel: groupCRC slope (CRC vs control effect on abundance vs on overdispersion). Horizontal bars show 95% CI on c_effect; vertical bars show 95% CI on v_effect. Points are coloured by per-taxon FDR (red: c_FDR < 0.05; blue: v_FDR < 0.05; purple: both; grey: neither). Note that for the Intercept panel `c_FDR < 0.05` simply flags taxa whose baseline log-abundance differs from the across-taxa geometric mean, so most rare/abundant taxa qualify; for the groupCRC panel the FDR colours flag genuine CRC-vs-control differential signals."
+#| fig-width: 14
+#| fig-height: 6
+
+# Shared colour scheme + helpers, reused below for the DA-off comparison plot.
+sig_colors <- c(
+  "neither"          = "grey75",
+  "abundance only"   = "#E41A1C",
+  "variability only" = "#377EB8",
+  "both"             = "#984EA3"
+)
+
+extract_taxon_data <- function(this_fit, case_label, param_name) {
+  taxon_col <- attr(this_fit, ".cell_group")
+  this_fit |>
+    dplyr::filter(.data$parameter == param_name) |>
+    dplyr::transmute(
+      taxon_id = .data[[taxon_col]],
+      case = case_label,
+      parameter = param_name,
+      c_effect, c_lower, c_upper, c_FDR,
+      v_effect, v_lower, v_upper, v_FDR,
+      sig_c = .data$c_FDR < 0.05,
+      sig_v = .data$v_FDR < 0.05,
+      significance = dplyr::case_when(
+        sig_c & sig_v ~ "both",
+        sig_c        ~ "abundance only",
+        sig_v        ~ "variability only",
+        TRUE         ~ "neither"
+      )
+    )
+}
+
+make_2d_plot <- function(plot_data, title_label, x_lab, y_lab,
+                          n_labels_per_facet = 5L,
+                          omit_ci = TRUE) {
+  label_data <- plot_data |>
+    dplyr::filter(.data$significance != "neither") |>
+    dplyr::group_by(.data$case) |>
+    dplyr::arrange(dplyr::desc(pmax(
+      -log10(pmax(.data$c_FDR, 1e-300)),
+      -log10(pmax(.data$v_FDR, 1e-300))
+    ))) |>
+    dplyr::slice_head(n = n_labels_per_facet) |>
+    dplyr::ungroup()
+
+  plot_data <- plot_data |>
+    dplyr::mutate(
+      significance = factor(.data$significance, levels = names(sig_colors))
+    )
+
+  p <- ggplot(plot_data, aes(x = c_effect, y = v_effect, color = significance)) +
+    geom_vline(xintercept = 0, linetype = "dotted", color = "grey50") +
+    geom_hline(yintercept = 0, linetype = "dotted", color = "grey50")
+
+  if (!omit_ci) {
+    p <- p +
+      geom_errorbarh(aes(xmin = c_lower, xmax = c_upper),
+                      height = 0, alpha = 0.5, linewidth = 0.25) +
+      geom_errorbar(aes(ymin = v_lower, ymax = v_upper),
+                      width = 0, alpha = 0.5, linewidth = 0.25)
+  }
+
+  p +
+    geom_point(size = 0.45, alpha = 0.7) +
+    ggrepel::geom_text_repel(
+      data = label_data,
+      aes(label = stringr::str_trunc(taxon_id, 40)),
+      size = 2.4, max.overlaps = 8, segment.size = 0.2, show.legend = FALSE
+    ) +
+    facet_wrap(~ case, ncol = 1) +
+    scale_color_manual(values = sig_colors, drop = FALSE) +
+    labs(title = title_label, x = x_lab, y = y_lab, color = "FDR < 0.05") +
+    theme_validation +
+    theme(strip.text = element_text(face = "bold"),
+          plot.title = element_text(face = "bold", hjust = 0.5))
+}
+
+slope_param <- paste0("group", group_levels[[2L]])
+
+qc_intercept <- extract_taxon_data(fit, "Original Zeller cohort", "Intercept")
+qc_slope     <- extract_taxon_data(fit, "Original Zeller cohort", slope_param)
+
+p_qc_int <- make_2d_plot(
+  qc_intercept,
+  title_label = "Intercept",
+  x_lab = "c_effect (baseline abundance, log-odds vs geometric mean)",
+  y_lab = "v_effect (baseline overdispersion)"
+)
+p_qc_slope <- make_2d_plot(
+  qc_slope,
+  title_label = slope_param,
+  x_lab = paste0("c_effect (abundance: ", group_labels[[2L]], " vs ", group_labels[[1L]], ")"),
+  y_lab = paste0("v_effect (variability: ", group_labels[[2L]], " vs ", group_labels[[1L]], ")")
+)
+
+qc_2d_plot <- (p_qc_int + theme(legend.position = "none")) |
+  (p_qc_slope + theme(legend.position = "bottom"))
+
+qc_2d_plot
+
+ggplot2::ggsave(
+  filename = "sccomp_qc_2d_plot.pdf",
+  plot = qc_2d_plot,
+  width = 14,
+  height = 6,
+  units = "in",
+  device = grDevices::cairo_pdf,
+  dpi = 320
+)
+```
+
+```{r sccomp-parameters}
+
+sccomp_params <- extract_sccomp_params_brito(fit)
+# Tell the simulator to use the observed per-class sample counts from the
+# filtered cohort (instead of the default balanced floor(N/2)).
+observed_n_per_group <- as.integer(table(factor(sample_metadata$group, levels = group_levels)))
+stopifnot(length(observed_n_per_group) == 2L, all(observed_n_per_group > 0L))
+sim_params <- build_simulation_params_brito(
+  sccomp_params,
+  n_reps_auc = params$n_reps_null,
+  group_levels = group_levels,
+  n_samples_per_group = observed_n_per_group
+)
+message(
+  "Simulating with observed per-class sample sizes: ",
+  paste(group_levels, observed_n_per_group, sep = "=", collapse = ", ")
+)
+
+parameter_summary <- tibble::tibble(
+  quantity = c(
+    "Samples used for simulation",
+    "Taxa used for simulation",
+    "Significant DA taxa available to simulator",
+    "Mean library size",
+    "Library-size SD",
+    "Taxon-level log-sigma SD"
+  ),
+  value = c(
+    sim_params$n_samples,
+    sim_params$n_taxa,
+    length(sccomp_params$slope_effects_significant),
+    round(sim_params$library_size_mean, 1),
+    round(sim_params$library_size_sd, 1),
+    round(sim_params$sd_log_overdispersion_realistic, 4)
+  )
+)
+
+parameter_summary |>
+  knitr::kable()
+```
+
+## DA-Off Simulations
+
+```{r simulate-da-off-null}
+
+simulate_da_off_once <- function(seed, preserve_group_variability = FALSE) {
+  if (preserve_group_variability) {
+    set.seed(seed + 20000)
+    paired_idx <- sample.int(
+      length(sccomp_params$intercept_effects),
+      size = sim_params$n_taxa,
+      replace = TRUE
+    )
+    composition_intercepts <- sccomp_params$intercept_effects[paired_idx]
+    composition_intercepts <- composition_intercepts - mean(composition_intercepts)
+    dispersion_group_0 <- sccomp_params$alpha_intercept_effects[paired_idx]
+    dispersion_group_1 <- dispersion_group_0 + sccomp_params$v_slope[paired_idx]
+    intercept_dispersion_matrix <- rbind(dispersion_group_0, dispersion_group_1)
+
+    sim_r <- simulate_case_realistic_taxa(
+      slope_vector = rep(0, sim_params$n_taxa),
+      mu_inv_softmax = composition_intercepts,
+      log_dispersion_assoc = 0,
+      intercept_dispersion_matrix = intercept_dispersion_matrix,
+      sd_log_overdispersion = 0,
+      seed = seed,
+      n_taxa = sim_params$n_taxa,
+      n_samples_per_group = sim_params$n_samples_per_group,
+      library_size_mean = sim_params$library_size_mean,
+      library_size_sd = sim_params$library_size_sd
+    )
+    sim_r <- synthetic_sim_add_two_group_factor(sim_r, group_levels)
+    sim_r$seed <- seed
+    sim_r$n_da_taxa <- 0L
+    return(sim_r)
+  }
+
+  run_simulation_job_brito(
+    job_row = tibble::tibble(seed = seed, n_da_taxa = 0L),
+    composition_intercept_by_taxon = sim_params$mu_inv_softmax_base_realistic,
+    dispersion_intercept_by_taxon = sim_params$intercept_disp_realistic_taxon,
+    mean_dispersion_assoc_slope = 0,
+    slope_effects_distribution = sccomp_params$slope_effects,
+    sd_log_overdispersion = sim_params$sd_log_overdispersion_realistic,
+    n_taxa = sim_params$n_taxa,
+    n_samples = sim_params$n_samples,
+    n_samples_per_group = sim_params$n_samples_per_group,
+    library_size_mean = sim_params$library_size_mean,
+    library_size_sd = sim_params$library_size_sd,
+    group_levels = group_levels
+  )
+}
+
+analyse_da_off_once <- function(seed, preserve_group_variability = FALSE) {
+  sim_r <- simulate_da_off_once(seed, preserve_group_variability = preserve_group_variability)
+  sim_r$count_long <- filter_by_abundance_cases(
+    sim_r$count_long,
+    threshold = params$abundance_threshold
+  )
+  result <- run_analysis_job(
+    sim_r = sim_r,
+    max_perm = params$n_permutations_null,
+    batch = params$n_permutations_null,
+    target_se = 1e-9,
+    return_full = TRUE
+  )
+
+  purrr::imap_dfr(result$method_results, function(mr, method_key) {
+    tibble::tibble(
+      seed = seed,
+      method_key = method_key,
+      method = pretty_method_label(method_key),
+      reference_mean_distance = mr$group1,
+      focal_mean_distance = mr$group2,
+      dispersion_delta = mr$delta,
+      p_value = mr$p_value,
+      n_perm = mr$n_perm,
+      simulation = if (preserve_group_variability) {
+        "No DA, Yes DD"
+      } else {
+        "No DA, No DD"
+      }
+    )
+  })
+}
+
+null_seeds <- sim_params$rep_seeds_auc
+null_results <- dplyr::bind_rows(
+  lapply(null_seeds, analyse_da_off_once, preserve_group_variability = FALSE),
+  lapply(null_seeds, analyse_da_off_once, preserve_group_variability = TRUE)
+)
+
+null_results |>
+  dplyr::count(simulation, method, significant = .data$p_value < 0.05) |>
+  tidyr::complete(
+    simulation,
+    method,
+    significant = c(FALSE, TRUE),
+    fill = list(n = 0L)
+  ) |>
+  tidyr::pivot_wider(names_from = significant, values_from = n, values_fill = 0) |>
+  dplyr::rename(n_not_significant = `FALSE`, n_significant = `TRUE`) |>
+  dplyr::mutate(false_positive_rate = n_significant / (n_significant + n_not_significant)) |>
+  knitr::kable(digits = 3)
+```
+
+## PCoA: Original vs No DA, Yes DD
+
+```{r pcoa-original-vs-no-da-yes-dd}
+#| fig-cap: "Bray-Curtis PCoA for the observed Zeller cohort (left) and a representative DA-off simulation with group variability retained (No DA, Yes DD; right). Each point is a sample; large points mark group centroids; faint segments connect samples to their group centroid."
+#| fig-width: 14
+#| fig-height: 6
+
+build_pcoa_plot_case <- function(count_long_case, sample_metadata_case, case_label) {
+  inp <- build_standard_betadisper_inputs_paper(
+    count_long = count_long_case,
+    sample_metadata = sample_metadata_case,
+    distance_method = "bray",
+    group_levels = group_levels
+  )
+
+  pcoa <- stats::cmdscale(inp$dist, k = 2, eig = TRUE)
+  sites <- as.data.frame(pcoa$points)
+  colnames(sites) <- c("Axis1", "Axis2")
+  sites$sample_id <- rownames(sites)
+
+  md <- sample_metadata_case |>
+    dplyr::mutate(sample_id = as.character(.data$sample_id)) |>
+    dplyr::distinct(.data$sample_id, .data$group)
+
+  sites <- sites |>
+    dplyr::mutate(sample_id = as.character(.data$sample_id)) |>
+    dplyr::left_join(md, by = "sample_id") |>
+    dplyr::mutate(
+      group = factor(.data$group, levels = group_levels),
+      group_label = factor(group_labels[as.character(.data$group)], levels = group_labels)
+    )
+
+  centroids <- sites |>
+    dplyr::group_by(.data$group_label) |>
+    dplyr::summarise(
+      cx = mean(.data$Axis1, na.rm = TRUE),
+      cy = mean(.data$Axis2, na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  seg_df <- sites |>
+    dplyr::left_join(centroids, by = "group_label")
+
+  hull_df <- sites |>
+    dplyr::group_by(.data$group_label) |>
+    dplyr::group_modify(\(d, ...) {
+      if (nrow(d) < 3) return(d[0, , drop = FALSE])
+      idx <- grDevices::chull(d$Axis1, d$Axis2)
+      d[idx, , drop = FALSE] |>
+        dplyr::slice(c(seq_len(n()), 1))
+    }) |>
+    dplyr::ungroup()
+
+  eigvals <- pcoa$eig
+  pct <- 100 * eigvals / sum(pmax(eigvals, 0), na.rm = TRUE)
+  pc1_lab <- sprintf("PCoA 1 (%.1f%%)", pct[[1L]])
+  pc2_lab <- sprintf("PCoA 2 (%.1f%%)", pct[[2L]])
+
+  # Publication palette (purple/orange) for high contrast on white background.
+  pcoa_group_cols <- stats::setNames(
+    c("#5E3C99", "#D17A22"),
+    group_labels
+  )
+
+  ggplot(sites, aes(x = Axis1, y = Axis2)) +
+    geom_polygon(
+      data = hull_df,
+      aes(x = Axis1, y = Axis2, fill = group_label, group = group_label),
+      alpha = 0.14,
+      color = NA,
+      inherit.aes = FALSE
+    ) +
+    geom_segment(
+      data = seg_df,
+      aes(x = cx, y = cy, xend = Axis1, yend = Axis2, color = group_label),
+      alpha = 0.22, linewidth = 0.2
+    ) +
+    scale_color_manual(values = pcoa_group_cols, drop = FALSE) +
+    scale_fill_manual(values = pcoa_group_cols, drop = FALSE, guide = "none") +
+    labs(
+      title = case_label,
+      x = pc1_lab,
+      y = pc2_lab,
+      color = NULL
+    ) +
+    theme_validation +
+    theme(plot.title = element_text(face = "bold", hjust = 0.5))
+}
+
+pcoa_original <- build_pcoa_plot_case(
+  count_long_case = count_long_analysis,
+  sample_metadata_case = sample_metadata,
+  case_label = "Original"
+)
+
+representative_seed <- sim_params$rep_seeds_auc[[1L]]
+sim_retained_pcoa <- simulate_da_off_once(
+  seed = representative_seed,
+  preserve_group_variability = TRUE
+)
+sim_retained_pcoa$count_long <- filter_by_abundance_cases(
+  sim_retained_pcoa$count_long,
+  threshold = params$abundance_threshold
+)
+
+pcoa_no_da_yes_dd <- build_pcoa_plot_case(
+  count_long_case = sim_retained_pcoa$count_long,
+  sample_metadata_case = sim_retained_pcoa$sample_metadata,
+  case_label = "Simulated: No DA, Yes DD"
+)
+
+pcoa_pair_plot <- pcoa_original | pcoa_no_da_yes_dd
+pcoa_pair_plot
+
+ggplot2::ggsave(
+  filename = "pcoa_original_vs_no_da_yes_dd.pdf",
+  plot = pcoa_pair_plot,
+  width = 14,
+  height = 6,
+  units = "in",
+  device = grDevices::cairo_pdf,
+  dpi = 320
+)
+```
+
+## UMAP: Sample Composition (Filtered Taxa)
+
+```{r umap-original-vs-no-da-yes-dd}
+#| fig-cap: "UMAP of sample composition for filtered taxa in Original and representative No DA, Yes DD cohorts. Rows show preprocessing variants: raw proportions, arcsin-sqrt transformed proportions, and arcsin-sqrt transformed proportions with per-taxon z-scaling to reduce the dominance of highly abundant taxa."
+#| fig-width: 14
+#| fig-height: 10
+
+build_umap_case <- function(count_long_case, sample_metadata_case, case_label, transform_label) {
+  md <- sample_metadata_case |>
+    dplyr::mutate(sample_id = as.character(.data$sample_id)) |>
+    dplyr::distinct(.data$sample_id, .data$group)
+
+  count_matrix <- count_long_case |>
+    dplyr::mutate(
+      sample_id = as.character(.data$sample_id),
+      taxon_id = as.character(.data$taxon_id),
+      count = as.numeric(.data$count)
+    ) |>
+    dplyr::group_by(.data$sample_id, .data$taxon_id) |>
+    dplyr::summarise(count = sum(.data$count, na.rm = TRUE), .groups = "drop") |>
+    tidyr::pivot_wider(
+      names_from = .data$taxon_id,
+      values_from = .data$count,
+      values_fill = 0
+    ) |>
+    tibble::column_to_rownames("sample_id") |>
+    as.matrix()
+
+  sample_totals <- rowSums(count_matrix)
+  feature_mat <- sweep(count_matrix, 1, pmax(sample_totals, 1), "/")
+  sample_ids <- rownames(feature_mat)
+
+  # Enforce strict numeric matrix format for uwot.
+  if (!is.matrix(feature_mat)) {
+    feature_mat <- matrix(feature_mat, ncol = 1L)
+  }
+  storage.mode(feature_mat) <- "double"
+  feature_mat[!is.finite(feature_mat)] <- 0
+
+  # UMAP needs at least 2 feature columns to be informative/stable.
+  if (ncol(feature_mat) < 2L) {
+    feature_mat <- cbind(feature_mat, rep(0, nrow(feature_mat)))
+  }
+
+  clip01 <- function(x) {
+    x[x < 0] <- 0
+    x[x > 1] <- 1
+    x
+  }
+
+  feature_mat <- switch(
+    transform_label,
+    "Raw proportions" = feature_mat,
+    "Arcsin-sqrt proportions" = {
+      x <- clip01(feature_mat)
+      asin(sqrt(x))
+    },
+    "Arcsin-sqrt + per-taxon scaling" = {
+      x <- clip01(feature_mat)
+      x <- asin(sqrt(x))
+      x <- scale(x, center = TRUE, scale = TRUE)
+      x[!is.finite(x)] <- 0
+      x
+    },
+    stop("Unknown transform label: ", transform_label)
+  )
+
+  feature_mat <- as.matrix(feature_mat)
+  feature_mat[!is.finite(feature_mat)] <- 0
+
+  # Drop zero-variance taxa columns to stabilise UMAP initialization.
+  keep_var <- apply(feature_mat, 2, stats::sd, na.rm = TRUE) > 0
+  if (any(keep_var)) {
+    feature_mat <- feature_mat[, keep_var, drop = FALSE]
+  }
+  if (ncol(feature_mat) < 2L) {
+    feature_mat <- cbind(feature_mat, stats::rnorm(nrow(feature_mat), sd = 1e-6))
+  }
+
+  set.seed(
+    100 + match(
+      transform_label,
+      c(
+        "Raw proportions",
+        "Arcsin-sqrt proportions",
+        "Arcsin-sqrt + per-taxon scaling"
+      )
+    ) +
+      ifelse(case_label == "Original", 0, 10)
+  )
+
+  um <- try(
+    uwot::umap(
+      feature_mat,
+      n_neighbors = 15,
+      min_dist = 0.2,
+      metric = "euclidean",
+      n_components = 2,
+      init = "random",
+      ret_model = FALSE,
+      n_threads = max(1, parallelly::availableCores() - 1),
+      verbose = FALSE
+    ),
+    silent = TRUE
+  )
+  if (inherits(um, "try-error")) {
+    um_cfg <- umap::umap.defaults
+    um_cfg$n_neighbors <- 15
+    um_cfg$min_dist <- 0.2
+    um_cfg$metric <- "euclidean"
+    um_cfg$n_components <- 2
+    um_cfg$random_state <- 101
+    um_cfg$verbose <- FALSE
+    um <- umap::umap(feature_mat, config = um_cfg)$layout
+  }
+  um_vec <- suppressWarnings(as.numeric(unlist(um)))
+  if (length(um_vec) %% length(sample_ids) == 0) {
+    um <- matrix(um_vec, nrow = length(sample_ids), byrow = FALSE)
+  } else {
+    um <- as.matrix(um)
+  }
+  storage.mode(um) <- "double"
+  if (!is.matrix(um) || nrow(um) != length(sample_ids) || ncol(um) != 2) {
+    um_cfg <- umap::umap.defaults
+    um_cfg$n_neighbors <- 15
+    um_cfg$min_dist <- 0.2
+    um_cfg$metric <- "euclidean"
+    um_cfg$n_components <- 2
+    um_cfg$random_state <- 101
+    um_cfg$verbose <- FALSE
+    um <- umap::umap(feature_mat, config = um_cfg)$layout |>
+      as.matrix()
+  }
+  um_vec <- suppressWarnings(as.numeric(unlist(um)))
+  if (length(um_vec) %% length(sample_ids) == 0) {
+    um <- matrix(um_vec, nrow = length(sample_ids), byrow = FALSE)
+  } else {
+    um <- as.matrix(um)
+  }
+  storage.mode(um) <- "double"
+  if (!is.matrix(um) || nrow(um) != length(sample_ids) || ncol(um) != 2) {
+    # Rare backend failure mode: fallback to a stable 2D projection so the
+    # report remains renderable.
+    pc <- stats::prcomp(feature_mat, center = TRUE, scale. = TRUE)
+    um <- pc$x[, 1:2, drop = FALSE]
+  }
+
+  if (length(um[, 1]) != length(sample_ids) || length(um[, 2]) != length(sample_ids)) {
+    stop(
+      "UMAP embedding size mismatch [", case_label, " / ", transform_label, "]: sample_n=",
+      length(sample_ids),
+      "; nrow=", nrow(um),
+      "; ncol=", ncol(um),
+      "; len_col1=", length(um[, 1]),
+      "; class_col1=", class(um[, 1])[1]
+    )
+  }
+
+  out <- tibble::tibble(
+    sample_id = sample_ids,
+    UMAP1 = um[, 1],
+    UMAP2 = um[, 2]
+  ) |>
+    dplyr::left_join(md, by = "sample_id") |>
+    dplyr::mutate(
+      case = case_label,
+      transform = transform_label,
+      group_label = factor(group_labels[as.character(.data$group)], levels = group_labels)
+    )
+
+  hull <- out |>
+    dplyr::group_by(.data$group_label) |>
+    dplyr::group_modify(\(d, ...) {
+      if (nrow(d) < 3) return(d[0, , drop = FALSE])
+      idx <- grDevices::chull(d$UMAP1, d$UMAP2)
+      d[idx, , drop = FALSE] |>
+        dplyr::slice(c(seq_len(n()), 1))
+    }) |>
+    dplyr::ungroup() |>
+    dplyr::mutate(case = case_label, transform = transform_label)
+
+  list(points = out, hull = hull)
+}
+
+umap_transforms <- c(
+  "Raw proportions",
+  "Arcsin-sqrt proportions",
+  "Arcsin-sqrt + per-taxon scaling"
+)
+
+umap_case_results <- c(
+  lapply(umap_transforms, function(tr) {
+    build_umap_case(
+      count_long_case = count_long_analysis,
+      sample_metadata_case = sample_metadata,
+      case_label = "Original",
+      transform_label = tr
+    )
+  }),
+  lapply(umap_transforms, function(tr) {
+    build_umap_case(
+      count_long_case = sim_retained_pcoa$count_long,
+      sample_metadata_case = sim_retained_pcoa$sample_metadata,
+      case_label = "Simulated: No DA, Yes DD",
+      transform_label = tr
+    )
+  })
+)
+
+umap_points <- dplyr::bind_rows(lapply(umap_case_results, `[[`, "points")) |>
+  dplyr::mutate(
+    case = factor(.data$case, levels = c("Original", "Simulated: No DA, Yes DD")),
+    transform = factor(.data$transform, levels = umap_transforms)
+  )
+umap_hulls <- dplyr::bind_rows(lapply(umap_case_results, `[[`, "hull")) |>
+  dplyr::mutate(
+    case = factor(.data$case, levels = c("Original", "Simulated: No DA, Yes DD")),
+    transform = factor(.data$transform, levels = umap_transforms)
+  )
+
+umap_group_cols <- stats::setNames(
+  c("#5E3C99", "#D17A22"),
+  group_labels
+)
+
+umap_comparison_plot <- ggplot(umap_points, aes(x = UMAP1, y = UMAP2, color = group_label)) +
+  geom_polygon(
+    data = umap_hulls,
+    aes(
+      x = UMAP1,
+      y = UMAP2,
+      fill = group_label,
+      group = interaction(group_label, case, transform)
+    ),
+    alpha = 0.14,
+    color = NA,
+    inherit.aes = FALSE
+  ) +
+  geom_point(size = 1.6, alpha = 0.75) +
+  facet_grid(transform ~ case, scales = "free") +
+  scale_color_manual(values = umap_group_cols, drop = FALSE) +
+  scale_fill_manual(values = umap_group_cols, drop = FALSE, guide = "none") +
+  labs(x = "UMAP 1", y = "UMAP 2", color = NULL) +
+  theme_validation
+
+umap_comparison_plot
+
+ggplot2::ggsave(
+  filename = "umap_sample_composition_comparison.pdf",
+  plot = umap_comparison_plot,
+  width = 14,
+  height = 10,
+  units = "in",
+  device = grDevices::cairo_pdf,
+  dpi = 320
+)
+```
+
+## sccomp 2D Diagnostics: Original vs DA-Off Refits
+
+For each taxon, sccomp returns the posterior of the **composition**
+effect (`c_effect`, mean abundance) and the **variability** effect
+(`v_effect`, overdispersion) for the `groupCRC` slope. We plot one
+panel per case (Original / No DA, No DD / No DA, Yes DD), each showing
+`c_effect` (x) vs `v_effect` (y) with their 95% credible intervals.
+
+We deliberately do **not** use `sccomp_plot_intervals_2D` here. That
+function unconditionally splits each parameter into `raw` and
+`adjusted` facets ; for readability we plot the posterior summaries
+`(c_effect, v_effect)` in a single panel per coefficient.
+
+Every `sccomp_estimate` fit in this report passes
+`exclude_mean_variability_association = TRUE`. This replaces the older
+misleading `exclude_priors` knob and excludes the inferred
+mean-variability coupling during fitting (distinct from shrinking the rest
+of the prior stack). For this benchmarking figure we want the plotted
+effects read directly off the posterior table, without an extra facet
+split.
+
+```{r refit-sccomp-on-simulated}
+#| cache: false
+
+sccomp_simulated_fits_path <- "ZellerG_2014_sccomp_simulated_fits.rds"
+
+fit_sccomp_on_sim <- function(sim_r, sim_label) {
+  sim_input <- sim_r$count_long |>
+    dplyr::transmute(
+      sample_id = as.character(.data$sample_id),
+      taxon_id  = as.character(.data$taxon_id),
+      count     = as.integer(round(.data$count)),
+      group     = factor(.data$group, levels = group_levels)
+    )
+
+  message("Refitting sccomp on simulated cohort: ", sim_label)
+
+  sim_input |>
+    sccomp::sccomp_estimate(
+      formula_composition = ~ group,
+      formula_variability = ~ group,
+      sample = "sample_id",
+      cell_group = "taxon_id",
+      abundance = "count",
+      inference_method = "hmc",
+      cores = max(1, parallelly::availableCores() - 1),
+      bimodal_mean_variability_association = TRUE,
+      verbose = FALSE,
+      max_sampling_iterations = 3000,
+      sig_figs = 6,
+      portable = FALSE,
+      cache_stan_model = sccomp_stan_cache_dir,
+      exclude_mean_variability_association = TRUE
+    ) |>
+    sccomp::sccomp_test(contrasts = c(
+      "Intercept" = "`(Intercept)`",
+      paste0("group", group_levels[[2L]])
+    ))
+}
+
+if (!file.exists(sccomp_simulated_fits_path)) {
+  representative_seed <- sim_params$rep_seeds_auc[[1L]]
+  sim_no_dd  <- simulate_da_off_once(representative_seed, preserve_group_variability = FALSE)
+  sim_yes_dd <- simulate_da_off_once(representative_seed, preserve_group_variability = TRUE)
+
+  fit_no_dd  <- fit_sccomp_on_sim(sim_no_dd,  "No DA, No DD")
+  fit_yes_dd <- fit_sccomp_on_sim(sim_yes_dd, "No DA, Yes DD")
+
+  saveRDS(
+    list(seed = representative_seed, fit_no_dd = fit_no_dd, fit_yes_dd = fit_yes_dd),
+    sccomp_simulated_fits_path
+  )
+} else {
+  message("Using existing sccomp fits on simulated cohorts: ",
+          sccomp_simulated_fits_path)
+}
+
+sccomp_simulated_fits <- readRDS(sccomp_simulated_fits_path)
+```
+
+```{r sccomp-2d-comparison}
+#| fig-cap: "Per-taxon (c_effect, v_effect) posterior for the original Zeller cohort and for sccomp refits on a representative DA-off simulated cohort. Left column: Intercept (baseline taxon log-odds abundance vs baseline log-precision). Right column: groupCRC slope (CRC vs control effect on abundance vs on overdispersion). Horizontal bars: 95% CI on c_effect; vertical bars: 95% CI on v_effect. Colours: c_FDR < 0.05 = red, v_FDR < 0.05 = blue, both = purple, neither = grey. Reading guide: the Intercept column should look essentially identical across rows because the simulator re-uses the empirical intercept distribution; the groupCRC column should show DA collapse (c_effect near zero) in both DA-off cases, with vertical (v_effect) spread retained in the No DA, Yes DD case relative to No DA, No DD."
+#| fig-width: 14
+#| fig-height: 16
+
+fits_with_labels <- list(
+  list(fit = fit,                              label = "Original Zeller cohort"),
+  list(fit = sccomp_simulated_fits$fit_no_dd,  label = "Simulated: No DA, No DD"),
+  list(fit = sccomp_simulated_fits$fit_yes_dd, label = "Simulated: No DA, Yes DD")
+)
+
+case_levels <- vapply(fits_with_labels, `[[`, character(1), "label")
+
+bind_param_data <- function(param_name) {
+  purrr::map_dfr(fits_with_labels, function(x) {
+    extract_taxon_data(x$fit, x$label, param_name)
+  }) |>
+    dplyr::mutate(case = factor(.data$case, levels = case_levels))
+}
+
+intercept_data <- bind_param_data("Intercept")
+slope_data     <- bind_param_data(slope_param)
+
+p_int <- make_2d_plot(
+  intercept_data,
+  title_label = "Intercept",
+  x_lab = "c_effect (baseline abundance, log-odds vs geometric mean)",
+  y_lab = "v_effect (baseline overdispersion)"
+)
+p_slope <- make_2d_plot(
+  slope_data,
+  title_label = slope_param,
+  x_lab = paste0("c_effect (abundance: ", group_labels[[2L]], " vs ", group_labels[[1L]], ")"),
+  y_lab = paste0("v_effect (variability: ", group_labels[[2L]], " vs ", group_labels[[1L]], ")")
+)
+
+sccomp_2d_comparison_plot <- (p_int + theme(legend.position = "none")) |
+  (p_slope + theme(legend.position = "bottom"))
+
+sccomp_2d_comparison_plot
+
+ggplot2::ggsave(
+  filename = "sccomp_2d_comparison_plot.pdf",
+  plot = sccomp_2d_comparison_plot,
+  width = 14,
+  height = 16,
+  units = "in",
+  device = grDevices::cairo_pdf,
+  dpi = 320
+)
+```
+
+## Observed Versus DA-Off
+
+```{r observed-vs-da-off-table}
+
+comparison_table <- observed_permdisp |>
+  dplyr::select(method, observed_delta = dispersion_delta, observed_p = p_value) |>
+  dplyr::left_join(
+    null_results |>
+      dplyr::group_by(simulation, method) |>
+      dplyr::summarise(
+        null_median_delta = median(.data$dispersion_delta, na.rm = TRUE),
+        null_q025_delta = quantile(.data$dispersion_delta, 0.025, na.rm = TRUE),
+        null_q975_delta = quantile(.data$dispersion_delta, 0.975, na.rm = TRUE),
+        null_p_lt_0_05 = mean(.data$p_value < 0.05, na.rm = TRUE),
+        .groups = "drop"
+      ),
+    by = "method"
+  ) |>
+  dplyr::mutate(
+    observed_outside_null_interval = .data$observed_delta < .data$null_q025_delta |
+      .data$observed_delta > .data$null_q975_delta
+  ) |>
+  dplyr::arrange(simulation, method)
+
+comparison_table |>
+  knitr::kable(digits = 4)
+```
+
+```{r observed-vs-da-off-plot}
+#| fig-cap: "Original ZellerG_2014 PERMDISP delta plotted with two DA-off sccomp simulation controls. The 'No DA, No DD' null removes both group differential abundance and group differential dispersion; the 'No DA, Yes DD' control removes group differential abundance but preserves taxon-specific group differential dispersion."
+
+delta_plot_levels <- c(
+  "Original",
+  "No DA, No DD",
+  "No DA, Yes DD"
+)
+delta_plot_colors <- c(
+  "Original" = "#D55E00",
+  "No DA, No DD" = "#0072B2",
+  "No DA, Yes DD" = "#009E73"
+)
+
+observed_delta_results <- observed_permdisp |>
+  dplyr::transmute(
+    method,
+    simulation = "Original",
+    dispersion_delta,
+    p_value
+  )
+
+delta_plot_data <- dplyr::bind_rows(
+  observed_delta_results,
+  null_results |>
+    dplyr::select(method, simulation, dispersion_delta, p_value)
+) |>
+  dplyr::mutate(simulation = factor(.data$simulation, levels = delta_plot_levels))
+
+observed_vs_da_off_boxplot <- ggplot(delta_plot_data, aes(x = simulation, y = dispersion_delta, color = simulation)) +
+  geom_hline(yintercept = 0, linetype = "dotted", color = "grey45") +
+  geom_boxplot(
+    data = delta_plot_data |> dplyr::filter(.data$simulation != "Original"),
+    aes(fill = simulation),
+    alpha = 0.18,
+    outlier.shape = NA,
+    width = 0.55
+  ) +
+  geom_jitter(
+    data = delta_plot_data |> dplyr::filter(.data$simulation != "Original"),
+    width = 0.10,
+    height = 0,
+    alpha = 0.55,
+    size = 1.6
+  ) +
+  geom_point(
+    data = delta_plot_data |> dplyr::filter(.data$simulation == "Original"),
+    size = 3.2
+  ) +
+  facet_wrap(~ method, scales = "free_y") +
+  scale_color_manual(values = delta_plot_colors, drop = FALSE) +
+  scale_fill_manual(values = delta_plot_colors, drop = FALSE) +
+  labs(
+    x = "Case",
+    y = paste0("PERMDISP delta: ", group_labels[[2L]], " - ", group_labels[[1L]]),
+    color = NULL,
+    fill = NULL
+  ) +
+  theme_validation
+
+observed_vs_da_off_boxplot
+
+ggplot2::ggsave(
+  filename = "observed_vs_da_off_boxplot.pdf",
+  plot = observed_vs_da_off_boxplot,
+  width = 12,
+  height = 7,
+  units = "in",
+  device = grDevices::cairo_pdf,
+  dpi = 320
+)
+```
+
+```{r pvalue-comparison-plot}
+#| fig-cap: "Original ZellerG_2014 PERMDISP p-values plotted with DA-off simulation p-values. The dotted line marks the nominal 0.05 threshold."
+
+pvalue_plot_data <- delta_plot_data |>
+  dplyr::select(method, simulation, p_value)
+
+pvalue_comparison_boxplot <- ggplot(pvalue_plot_data, aes(x = simulation, y = p_value, color = simulation)) +
+  geom_hline(yintercept = 0.05, linetype = "dotted", color = "grey45") +
+  geom_boxplot(
+    data = pvalue_plot_data |> dplyr::filter(.data$simulation != "Original"),
+    aes(fill = simulation),
+    alpha = 0.18,
+    outlier.shape = NA,
+    width = 0.55
+  ) +
+  geom_jitter(
+    data = pvalue_plot_data |> dplyr::filter(.data$simulation != "Original"),
+    width = 0.10,
+    height = 0,
+    alpha = 0.55,
+    size = 1.6
+  ) +
+  geom_point(
+    data = pvalue_plot_data |> dplyr::filter(.data$simulation == "Original"),
+    size = 3.2
+  ) +
+  facet_wrap(~ method) +
+  tidybulk::scale_y_log10_reverse() +
+  scale_color_manual(values = delta_plot_colors, drop = FALSE) +
+  scale_fill_manual(values = delta_plot_colors, drop = FALSE) +
+  labs(x = "Case", y = "PERMDISP p-value", color = NULL, fill = NULL) +
+  theme_validation
+
+pvalue_comparison_boxplot
+
+ggplot2::ggsave(
+  filename = "pvalue_comparison_boxplot.pdf",
+  plot = pvalue_comparison_boxplot,
+  width = 12,
+  height = 7,
+  units = "in",
+  device = grDevices::cairo_pdf,
+  dpi = 320
+)
+```
+
+```{r proportion-whisker-three-cases}
+#| fig-cap: "Taxon proportion distributions for the Original ZellerG_2014 data and representative DA-off sccomp simulations (No DA, No DD; No DA, Yes DD). Points show mean proportions; whiskers show 95% sample intervals. The y-axis uses an arcsin-square-root transform."
+
+arcsin_sqrt_trans_proportion <- scales::trans_new(
+  name = "arcsin_sqrt",
+  transform = function(x) asin(sqrt(pmax(0, pmin(1, x)))),
+  inverse = function(x) sin(x)^2
+)
+
+representative_seed <- sim_params$rep_seeds_auc[[1L]]
+
+sim_matched_rep <- simulate_da_off_once(
+  seed = representative_seed,
+  preserve_group_variability = FALSE
+)
+sim_matched_rep$count_long <- filter_by_abundance_cases(
+  sim_matched_rep$count_long,
+  threshold = params$abundance_threshold
+)
+
+sim_retained_rep <- simulate_da_off_once(
+  seed = representative_seed,
+  preserve_group_variability = TRUE
+)
+sim_retained_rep$count_long <- filter_by_abundance_cases(
+  sim_retained_rep$count_long,
+  threshold = params$abundance_threshold
+)
+
+build_whisker_case <- function(count_long_case, case_label, n_top_taxa = 20L) {
+  count_long_case <- count_long_case |>
+    dplyr::mutate(
+      group_label = factor(group_labels[as.character(.data$group)], levels = group_labels),
+      proportion = .data$count / .data$library_size
+    )
+
+  taxon_order <- count_long_case |>
+    dplyr::group_by(.data$taxon_id) |>
+    dplyr::summarise(mean_prop = mean(.data$proportion, na.rm = TRUE), .groups = "drop") |>
+    dplyr::arrange(dplyr::desc(.data$mean_prop)) |>
+    dplyr::slice_head(n = n_top_taxa) |>
+    dplyr::mutate(
+      taxon_rank = dplyr::row_number(),
+      taxon_display = paste0("T", .data$taxon_rank)
+    ) |>
+    dplyr::select(.data$taxon_id, .data$taxon_rank, .data$taxon_display)
+
+  count_long_case |>
+    dplyr::inner_join(taxon_order, by = "taxon_id") |>
+    dplyr::mutate(case = case_label) |>
+    dplyr::group_by(.data$case, .data$group_label, .data$taxon_display, .data$taxon_rank) |>
+    dplyr::summarise(
+      mean_prop = mean(.data$proportion, na.rm = TRUE),
+      p_low = stats::quantile(.data$proportion, 0.025, na.rm = TRUE),
+      p_high = stats::quantile(.data$proportion, 0.975, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+proportion_whisker_data <- dplyr::bind_rows(
+  build_whisker_case(count_long_analysis, "Original"),
+  build_whisker_case(sim_matched_rep$count_long, "No DA, No DD"),
+  build_whisker_case(sim_retained_rep$count_long, "No DA, Yes DD")
+) |>
+  dplyr::mutate(
+    case = factor(.data$case, levels = delta_plot_levels),
+    taxon_display = factor(.data$taxon_display, levels = paste0("T", 1:20))
+  )
+
+prop_breaks_whisker <- c(0.001, 0.005, 0.01, 0.05, 0.1, 0.2, 0.5)
+prop_breaks_whisker <- prop_breaks_whisker[
+  prop_breaks_whisker <= max(proportion_whisker_data$p_high, na.rm = TRUE) * 1.1
+]
+
+ggplot(
+  proportion_whisker_data,
+  aes(x = taxon_display, y = mean_prop, ymin = p_low, ymax = p_high, color = group_label)
+) +
+  geom_pointrange(
+    position = position_dodge(width = 0.55),
+    linewidth = 0.35,
+    fatten = 1.5
+  ) +
+  facet_wrap(~ case, ncol = 1) +
+  scale_y_continuous(
+    trans = arcsin_sqrt_trans_proportion,
+    breaks = prop_breaks_whisker,
+    labels = scales::label_percent(accuracy = 0.1)
+  ) +
+  labs(
+    x = "Taxon rank within case (top 20 mean proportion)",
+    y = "Proportion (arcsin-sqrt scale, 95% interval)",
+    color = NULL
+  ) +
+  theme_validation +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+
+## Interpretation Template
+
+```{r interpretation-template}
+#| results: asis
+
+primary_simulation <- "No DA, No DD"
+primary_summary <- comparison_table |>
+  dplyr::filter(.data$simulation == primary_simulation) |>
+  dplyr::arrange(.data$observed_p)
+
+cat(
+  "In the observed ZellerG_2014 data, the strongest PERMDISP signal was observed for ",
+  primary_summary$method[[1L]],
+  " (delta = ",
+  round(primary_summary$observed_delta[[1L]], 4),
+  ", p = ",
+  signif(primary_summary$observed_p[[1L]], 3),
+  "). After refitting the cohort with sccomp and simulating matched datasets with group differential abundance switched off, the corresponding DA-off null median delta was ",
+  round(primary_summary$null_median_delta[[1L]], 4),
+  " with a 95% simulation interval of [",
+  round(primary_summary$null_q025_delta[[1L]], 4),
+  ", ",
+  round(primary_summary$null_q975_delta[[1L]], 4),
+  "].\n\n",
+  sep = ""
+)
+
+cat(
+  "This is the manuscript-ready contrast: PERMDISP detects differential beta dispersion in the actual ZellerG_2014 CRC vs control comparison, but the same analysis applied to sccomp simulations where DA is neutralized provides the null scale expected from fitted abundance and overdispersion alone."
+)
+```
+
+## Final Composite Patchwork Figure
+
+```{r final-composite-patchwork}
+#| fig-cap: "Final composite panel combining sccomp 2D summaries, PCoA hull plots, and Bray-Curtis DA-off null comparisons."
+#| fig-width: 12
+#| fig-height: 7
+
+compact_case_levels <- c("Original Zeller cohort", "Simulated: No DA, Yes DD")
+theme_patchwork_compact <- theme_validation +
+  theme(
+    axis.title.y = element_text(size = 7, margin = margin(0, 0, 0, 0)),
+    axis.title.x = element_text(size = 7, margin = margin(0, 0, 0, 0)),
+    axis.text.x = element_text(size = 6),
+    axis.text.y = element_text(size = 6),
+    strip.text.x = element_text(size = 7),
+    strip.text.y = element_text(size = 7),
+    legend.title = element_text(size = 7),
+    legend.text = element_text(size = 6),
+    plot.title = element_text(size = 8, face = "bold", hjust = 0.5),
+    panel.spacing.x = grid::unit(0.1, "lines"),
+    panel.spacing.y = grid::unit(0.1, "lines")
+  )
+
+intercept_data_compact <- intercept_data |>
+  dplyr::filter(.data$case %in% compact_case_levels) |>
+  dplyr::mutate(case = factor(.data$case, levels = compact_case_levels))
+slope_data_compact <- slope_data |>
+  dplyr::filter(.data$case %in% compact_case_levels) |>
+  dplyr::mutate(case = factor(.data$case, levels = compact_case_levels))
+
+p_int_compact <- make_2d_plot(
+  intercept_data_compact,
+  title_label = "Intercept",
+  x_lab = "c_effect",
+  y_lab = "v_effect",
+  n_labels_per_facet = 0L
+)
+p_slope_compact <- make_2d_plot(
+  slope_data_compact,
+  title_label = slope_param,
+  x_lab = "c_effect",
+  y_lab = "v_effect",
+  n_labels_per_facet = 0L
+)
+
+sccomp_compact_plot <- (p_int_compact + theme(legend.position = "none")) |
+  (p_slope_compact + theme(legend.position = "bottom"))
+
+bray_method_label <- delta_plot_data |>
+  dplyr::distinct(.data$method) |>
+  dplyr::filter(stringr::str_detect(stringr::str_to_lower(.data$method), "bray")) |>
+  dplyr::slice_head(n = 1) |>
+  dplyr::pull(.data$method)
+
+if (length(bray_method_label) == 0) {
+  stop("Could not find a Bray-Curtis method label in delta_plot_data.")
+}
+
+bray_delta_plot <- delta_plot_data |>
+  dplyr::filter(.data$method == bray_method_label) |>
+  dplyr::mutate(
+    simulation = factor(
+      as.character(.data$simulation),
+      levels = c("No DA, No DD", "No DA, Yes DD", "Original")
+    )
+  )
+bray_delta_non_original <- bray_delta_plot |>
+  dplyr::filter(.data$simulation != "Original")
+bray_delta_original <- bray_delta_plot |>
+  dplyr::filter(.data$simulation == "Original")
+
+bray_delta_plot <- bray_delta_plot |>
+  ggplot(aes(x = simulation, y = dispersion_delta)) +
+  geom_hline(yintercept = 0, linetype = "dotted", color = "grey45") +
+  geom_boxplot(
+    data = bray_delta_non_original,
+    aes(group = simulation),
+    alpha = 0.18,
+    fill = "grey92",
+    color = "grey35",
+    outlier.shape = NA,
+    width = 0.55
+  ) +
+  geom_jitter(
+    data = bray_delta_non_original,
+    color = "grey35",
+    width = 0.10,
+    height = 0,
+    alpha = 0.45,
+    size = 0.8
+  ) +
+  geom_point(
+    data = bray_delta_original,
+    color = "#D55E00",
+    size = 1.6
+  ) +
+  labs(
+    title = bray_method_label,
+    x = "Case",
+    y = "PERMDISP delta"
+  ) +
+  theme_patchwork_compact +
+  theme(
+    legend.position = "bottom",
+    axis.title.y = element_text(size = 7)
+  )
+
+bray_pvalue_plot <- pvalue_plot_data |>
+  dplyr::filter(.data$method == bray_method_label) |>
+  dplyr::mutate(
+    simulation = factor(
+      as.character(.data$simulation),
+      levels = c("No DA, No DD", "No DA, Yes DD", "Original")
+    )
+  )
+bray_pvalue_non_original <- bray_pvalue_plot |>
+  dplyr::filter(.data$simulation != "Original")
+bray_pvalue_original <- bray_pvalue_plot |>
+  dplyr::filter(.data$simulation == "Original")
+
+bray_pvalue_plot <- bray_pvalue_plot |>
+  ggplot(aes(x = simulation, y = p_value)) +
+  geom_hline(yintercept = 0.05, linetype = "dotted", color = "grey45") +
+  geom_boxplot(
+    data = bray_pvalue_non_original,
+    aes(group = simulation),
+    alpha = 0.18,
+    fill = "grey92",
+    color = "grey35",
+    outlier.shape = NA,
+    width = 0.55
+  ) +
+  geom_jitter(
+    data = bray_pvalue_non_original,
+    color = "grey35",
+    width = 0.10,
+    height = 0,
+    alpha = 0.45,
+    size = 0.8
+  ) +
+  geom_point(
+    data = bray_pvalue_original,
+    color = "#D55E00",
+    size = 1.6
+  ) +
+  tidybulk::scale_y_log10_reverse() +
+  labs(
+    title = bray_method_label,
+    x = "Case",
+    y = "PERMDISP p-value"
+  ) +
+  theme_patchwork_compact +
+  theme(
+    legend.position = "bottom",
+    axis.title.y = element_text(size = 7)
+  )
+
+pcoa_pair_compact_plot <- pcoa_pair_plot &
+  theme_patchwork_compact &
+  theme(
+    legend.position = "bottom",
+    axis.title.y = element_text(size = 7),
+    plot.margin = margin(0, 2, 0, 0, "pt")
+  )
+
+top_row_plot <- patchwork::wrap_plots(
+  patchwork::plot_spacer(),
+  sccomp_compact_plot,
+  ncol = 2,
+  widths = c(1.15, 1)
+)
+bottom_right_plot <- bray_delta_plot / bray_pvalue_plot +
+  patchwork::plot_layout(heights = c(1, 1))
+bottom_row_plot <- patchwork::wrap_plots(
+  pcoa_pair_compact_plot,
+  bottom_right_plot,
+  ncol = 2,
+  widths = c(1.15, 1)
+)
+
+final_patchwork_plot <- top_row_plot / bottom_row_plot +
+  patchwork::plot_layout(heights = c(1.08, 1), guides = "collect") &
+  theme_patchwork_compact &
+  theme(
+    plot.margin = margin(0, 0, 0, 0, "pt"),
+    legend.position = "bottom",
+    legend.key.size = grid::unit(0.2, "cm")
+  )
+
+final_patchwork_plot
+
+target_width_mm <- 183
+target_height_mm <- target_width_mm / (1024 / 596) * 1.2
+
+ggplot2::ggsave(
+  filename = "final_patchwork_summary.pdf",
+  plot = final_patchwork_plot,
+  width = target_width_mm,
+  height = target_height_mm,
+  units = "mm",
+  device = grDevices::cairo_pdf,
+  dpi = 320
+)
+```
