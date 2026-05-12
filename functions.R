@@ -2539,16 +2539,26 @@ extract_sccomp_params <- function(result) {
 build_simulation_params <- function(
   sccomp_params,
   n_reps_auc = 20,
-  group_levels
+  group_levels,
+  n_samples_per_group = NULL
 ) {
   if (length(group_levels) != 2) {
     stop("group_levels must have length 2 (Group==0 then Group==1 in design_matrix_from_groups).")
   }
   set.seed(123)
   n_taxa <- sccomp_params$n_taxa_real
-  n_samples_per_group <- floor(sccomp_params$n_samples_real / 2)
+  if (is.null(n_samples_per_group)) {
+    n_samples_per_group <- floor(sccomp_params$n_samples_real / 2)
+  }
+  if (!length(n_samples_per_group) %in% c(1L, 2L)) {
+    stop("n_samples_per_group must be length 1 (balanced) or length 2 (per-group counts).")
+  }
   n_groups <- 2
-  n_samples <- n_samples_per_group * n_groups
+  n_samples <- if (length(n_samples_per_group) == 1L) {
+    n_samples_per_group * n_groups
+  } else {
+    sum(n_samples_per_group)
+  }
 
   lib_def <- .sim_library_size_or_default(sccomp_params)
   library_size_mean <- lib_def$library_size_mean
@@ -2594,7 +2604,8 @@ build_simulation_params <- function(
 # `alpha_intercept_effects <- v_intercept` in build_simulation_params_brito().
 extract_sccomp_params_brito <- function(
     result,
-    use_precision_trend_from_fit = FALSE) {
+    use_precision_trend_from_fit = FALSE,
+    target_parameter = NULL) {
   model_input <- attr(result, "model_input")
 
   if (!is.null(model_input) && is.list(model_input)) {
@@ -2622,7 +2633,10 @@ extract_sccomp_params_brito <- function(
   if (length(group_parameter) == 0) {
     stop("No non-intercept parameter found in sccomp result.")
   }
-  group_parameter <- group_parameter[1]
+  # Pick the requested non-intercept term, or default to the first one.
+  # `c(NULL, x)[1] == x[1]`, so leaving target_parameter NULL preserves prior behaviour.
+  group_parameter <- c(target_parameter, group_parameter[1])[1]
+  stopifnot(group_parameter %in% unique(result$parameter))
 
   slope_effects <- result %>%
     filter(.data$parameter == group_parameter) %>%
@@ -2673,16 +2687,26 @@ extract_sccomp_params_brito <- function(
 build_simulation_params_brito <- function(
   sccomp_params,
   n_reps_auc = 20,
-  group_levels
+  group_levels,
+  n_samples_per_group = NULL
 ) {
   if (length(group_levels) != 2) {
     stop("group_levels must have length 2 (Group==0 then Group==1 in design_matrix_from_groups).")
   }
   set.seed(123)
   n_taxa <- sccomp_params$n_taxa_real
-  n_samples_per_group <- floor(sccomp_params$n_samples_real / 2)
+  if (is.null(n_samples_per_group)) {
+    n_samples_per_group <- floor(sccomp_params$n_samples_real / 2)
+  }
+  if (!length(n_samples_per_group) %in% c(1L, 2L)) {
+    stop("n_samples_per_group must be length 1 (balanced) or length 2 (per-group counts).")
+  }
   n_groups <- 2
-  n_samples <- n_samples_per_group * n_groups
+  n_samples <- if (length(n_samples_per_group) == 1L) {
+    n_samples_per_group * n_groups
+  } else {
+    sum(n_samples_per_group)
+  }
 
   lib_def <- .sim_library_size_or_default(sccomp_params)
   library_size_mean <- lib_def$library_size_mean
@@ -2739,9 +2763,16 @@ build_simulation_params_brito <- function(
 }
 
 design_matrix_from_groups <- function(n_samples_per_group) {
+  if (length(n_samples_per_group) == 1L) {
+    Group <- rep(c(0L, 1L), each = n_samples_per_group)
+  } else if (length(n_samples_per_group) == 2L) {
+    Group <- rep(c(0L, 1L), times = n_samples_per_group)
+  } else {
+    stop("n_samples_per_group must be length 1 (balanced) or length 2 (per-group counts).")
+  }
   cbind(
     Intercept = 1,
-    Group = rep(c(0L, 1L), each = n_samples_per_group)
+    Group = Group
   )
 }
 
@@ -2895,7 +2926,11 @@ simulate_case_realistic_taxa <- function(
   library_size_sd
 ) {
   n_groups <- 2
-  n_samples <- n_samples_per_group * n_groups
+  n_samples <- if (length(n_samples_per_group) == 1L) {
+    n_samples_per_group * n_groups
+  } else {
+    sum(n_samples_per_group)
+  }
   has_vec <- !is.null(intercept_dispersion)
   has_mat <- !is.null(intercept_dispersion_matrix)
   if (has_vec == has_mat) {
