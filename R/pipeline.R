@@ -67,30 +67,25 @@ simulate_case_realistic_taxa <- function(
   library_size_mean,
   library_size_sd
 ) {
-  n_groups <- 2
-  n_samples <- if (length(n_samples_per_group) == 1L) {
-    n_samples_per_group * n_groups
-  } else {
-    sum(n_samples_per_group)
-  }
-  has_vec <- !is.null(intercept_dispersion)
-  has_mat <- !is.null(intercept_dispersion_matrix)
-  if (has_vec == has_mat) {
+  if (is.null(intercept_dispersion) == is.null(intercept_dispersion_matrix)) {
     stop("Provide exactly one of intercept_dispersion (length n_taxa) or intercept_dispersion_matrix (2 x n_taxa).")
   }
-  simulate_compositional_bb( # nolint
-    slope_vector = slope_vector,
-    mu_inv_softmax = mu_inv_softmax,
-    log_dispersion_assoc = log_dispersion_assoc,
-    n_taxa = n_taxa,
-    n_samples = n_samples,
-    sd_log_overdispersion = sd_log_overdispersion,
-    intercept_dispersion = intercept_dispersion,
+  n_samples <- if (length(n_samples_per_group) == 1L) 2L * n_samples_per_group
+               else sum(n_samples_per_group)
+
+  simulate_compositional_bb(
+    slope_vector                = slope_vector,
+    mu_inv_softmax              = mu_inv_softmax,
+    log_dispersion_assoc        = log_dispersion_assoc,
+    n_taxa                      = n_taxa,
+    n_samples                   = n_samples,
+    sd_log_overdispersion       = sd_log_overdispersion,
+    intercept_dispersion        = intercept_dispersion,
     intercept_dispersion_matrix = intercept_dispersion_matrix,
-    library_size_mean = library_size_mean,
-    library_size_sd = library_size_sd,
-    design_matrix = design_matrix_from_groups(n_samples_per_group),
-    seed = seed
+    library_size_mean           = library_size_mean,
+    library_size_sd             = library_size_sd,
+    design_matrix               = design_matrix_from_groups(n_samples_per_group),
+    seed                        = seed
   )
 }
 
@@ -116,42 +111,26 @@ simulate_case_realistic_taxa <- function(
 #' @seealso \code{\link{run_permanova_job}} which uses this to pre-filter
 #'   before computing distances.
 #' @keywords internal
-#' @importFrom dplyr group_by summarise filter pull
-#' @importFrom rlang .data
 filter_by_abundance_cases <- function(count_long, threshold = NULL) {
-  if (is.null(threshold)) {
-    threshold <- abundance_threshold
-  }
-  mean_abundance <- count_long %>%
-    dplyr::group_by(.data$taxon_id) %>%
-    dplyr::summarise(
-      mean_prop = mean(.data$count / .data$library_size, na.rm = TRUE),
-      .groups = "drop"
-    )
-  keep_taxa <- mean_abundance %>%
-    dplyr::filter(.data$mean_prop >= threshold) %>%
-    dplyr::pull(.data$taxon_id)
-  count_long %>% dplyr::filter(.data$taxon_id %in% keep_taxa)
+  if (is.null(threshold)) threshold <- abundance_threshold
+  # Per-row proportion, averaged within taxon via stats::ave(), then keep
+  # rows whose taxon mean is >= threshold.
+  taxon_mean_prop <- stats::ave(
+    count_long$count / count_long$library_size,
+    count_long$taxon_id,
+    FUN = function(x) mean(x, na.rm = TRUE)
+  )
+  count_long[taxon_mean_prop >= threshold, , drop = FALSE]
 }
 
-#' Robustly extract \code{seed} and \code{n_da_taxa} from a job-grid row
+#' Extract \code{seed} and \code{n_da_taxa} from a job-grid row
 #'
-#' Shared helper used by the simulation runners. Accepts data frames,
-#' tibbles, and lists (the latter arising from \code{targets} workers that
-#' round-trip the row through serialisation), and copes with column-name
-#' mangling that sometimes happens when nested tibbles are coerced
-#' (\code{X1.seed}, \code{X2.seed}, ...).
+#' Pulls the two identifying fields out of a single-row data frame / tibble
+#' (or list) coming out of the simulation jobs grid. Coerces to data.frame
+#' for uniform indexing.
 #'
-#' Failure modes are all wrapped in informative \code{stop()} calls:
-#' \itemize{
-#'   \item \code{NULL} or empty row,
-#'   \item neither a \code{seed} (or \code{X\\d+\\.seed}) column nor an
-#'     \code{n_da_taxa} (or \code{X\\d+\\.n_da_taxa}) column,
-#'   \item missing/\code{NA} values after extraction.
-#' }
-#'
-#' @param job_row A single-row data frame / tibble / list with at minimum
-#'   \code{seed} and \code{n_da_taxa} fields.
+#' @param job_row A single-row data frame / tibble / list with \code{seed}
+#'   and \code{n_da_taxa} fields.
 #'
 #' @return Named list with \code{seed} (numeric) and \code{n_da_taxa}
 #'   (integer).
@@ -159,103 +138,24 @@ filter_by_abundance_cases <- function(count_long, threshold = NULL) {
 #' @seealso \code{\link{run_simulation_job_brito}}.
 #' @keywords internal
 extract_job_params <- function(job_row) {
-  # Normalize job_row to data.frame to handle serialization issues
-  if (is.null(job_row)) {
-    stop("job_row is NULL")
+  if (is.null(job_row)) stop("job_row is NULL")
+  job_row <- as.data.frame(job_row)
+  if (nrow(job_row) == 0L) stop("job_row is an empty data.frame")
+
+  pick <- function(field) {
+    if (!field %in% names(job_row)) {
+      stop("job_row missing '", field, "' column. Available columns: ",
+           paste(names(job_row), collapse = ", "))
+    }
+    val <- job_row[[field]][1]
+    if (is.na(val)) stop("Could not extract ", field, " from job_row: ", deparse(val))
+    val
   }
-  
-  # Convert to data.frame if needed (handles tibbles, lists, etc.)
-  if (!is.data.frame(job_row)) {
-    tryCatch({
-      job_row <- as.data.frame(job_row)
-    }, error = function(e) {
-      stop("Could not convert job_row to data.frame. Class: ", paste(class(job_row), collapse=", "), ". Error: ", e$message)
-    })
-  }
-  
-  if (is.data.frame(job_row)) {
-    if (nrow(job_row) == 0) {
-      stop("job_row is an empty data.frame")
-    }
-    # Handle nested column names (e.g., "X2.seed" instead of "seed")
-    seed_col <- NULL
-    n_da_col <- NULL
-    
-    if ("seed" %in% names(job_row)) {
-      seed_col <- "seed"
-    } else {
-      # Look for nested column names like "X2.seed", "X1.seed", etc.
-      seed_cols <- grep("^X\\d+\\.seed$|seed$", names(job_row), value = TRUE)
-      if (length(seed_cols) > 0) {
-        seed_col <- seed_cols[1]
-      }
-    }
-    
-    if ("n_da_taxa" %in% names(job_row)) {
-      n_da_col <- "n_da_taxa"
-    } else {
-      # Look for nested column names
-      n_da_cols <- grep("^X\\d+\\.n_da_taxa$|n_da_taxa$", names(job_row), value = TRUE)
-      if (length(n_da_cols) > 0) {
-        n_da_col <- n_da_cols[1]
-      }
-    }
-    
-    if (is.null(seed_col)) {
-      stop("job_row missing 'seed' column. Available columns: ", paste(names(job_row), collapse=", "))
-    }
-    if (is.null(n_da_col)) {
-      stop("job_row missing 'n_da_taxa' column. Available columns: ", paste(names(job_row), collapse=", "))
-    }
-    
-    seed_val <- job_row[[seed_col]][1]
-    n_da_val <- job_row[[n_da_col]][1]
-    if (is.null(seed_val) || length(seed_val) == 0 || is.na(seed_val)) {
-      stop("Could not extract seed from job_row: ", deparse(seed_val))
-    }
-    if (is.null(n_da_val) || length(n_da_val) == 0 || is.na(n_da_val)) {
-      stop("Could not extract n_da_taxa from job_row: ", deparse(n_da_val))
-    }
-    seed <- as.numeric(seed_val)
-    n_da <- as.integer(n_da_val)
-  } else if (is.list(job_row)) {
-    # Handle case where tibble was converted to list during serialization
-    # Check if it has tibble-like structure (seed and n_da_taxa as vectors)
-    if ("seed" %in% names(job_row) && "n_da_taxa" %in% names(job_row)) {
-      seed_val <- job_row$seed
-      n_da_val <- job_row$n_da_taxa
-      # If they're vectors, take first element
-      if (length(seed_val) > 0) seed_val <- seed_val[1]
-      if (length(n_da_val) > 0) n_da_val <- n_da_val[1]
-      seed <- as.numeric(seed_val)
-      n_da <- as.integer(n_da_val)
-    } else {
-      # Try to convert back to data.frame if possible
-      tryCatch({
-        job_df <- as.data.frame(job_row)
-        if ("seed" %in% names(job_df) && "n_da_taxa" %in% names(job_df)) {
-          seed <- as.numeric(job_df$seed[1])
-          n_da <- as.integer(job_df$n_da_taxa[1])
-        } else {
-          stop("job_row list missing 'seed' or 'n_da_taxa'. Available names: ", paste(names(job_row), collapse=", "))
-        }
-      }, error = function(e) {
-        stop("job_row list missing 'seed' or 'n_da_taxa'. Available names: ", paste(names(job_row), collapse=", "), ". Error: ", e$message)
-      })
-    }
-  } else {
-    stop("job_row must be a data.frame or list, got: ", paste(class(job_row), collapse=", "))
-  }
-  
-  # Final validation
-  if (is.na(seed) || length(seed) == 0) {
-    stop("seed is invalid after extraction: ", deparse(seed))
-  }
-  if (is.na(n_da) || length(n_da) == 0) {
-    stop("n_da_taxa is invalid after extraction: ", deparse(n_da))
-  }
-  
-  list(seed = seed, n_da_taxa = n_da)
+
+  list(
+    seed      = as.numeric(pick("seed")),
+    n_da_taxa = as.integer(pick("n_da_taxa"))
+  )
 }
 
 #' Run one simulation job with taxon-level dispersion intercepts (Brito variant)
@@ -319,72 +219,46 @@ extract_job_params <- function(job_row) {
 #'   \code{\link{build_simulation_params_brito}}.
 #' @keywords internal
 run_simulation_job_brito <- function(
-  job_row,                      # One row from jobs grid (must include seed, n_da_taxa)
-  composition_intercept_by_taxon,  # Composition intercept by taxon (baseline logits; length n_taxa)
-  dispersion_intercept_by_taxon,   # Dispersion intercept by taxon (alpha/log-sigma; length n_taxa; scalar allowed)
-  mean_dispersion_assoc_slope,     # Mean-variance association slope k in log(sigma) = -k*log(mu) + alpha
-  slope_effects_distribution,   # Empirical DA effect-size pool to sample non-zero taxa slopes
-  sd_log_overdispersion,        # Additional random log-sigma noise SD
-  n_taxa,                       # Number of taxa (must match composition/dispersion intercept vector lengths)
-  n_samples,                    # Total simulated samples
-  n_samples_per_group,          # Samples per group (used to build design matrix)
-  library_size_mean,            # Mean sequencing depth
-  library_size_sd,              # SD sequencing depth
-  group_levels = NULL            # If non-NULL, length-2 vector maps Group 0/1 to factor levels (caller supplies labels)
+  job_row,
+  composition_intercept_by_taxon,
+  dispersion_intercept_by_taxon,
+  mean_dispersion_assoc_slope,
+  slope_effects_distribution,
+  sd_log_overdispersion,
+  n_taxa,
+  n_samples,
+  n_samples_per_group,
+  library_size_mean,
+  library_size_sd,
+  group_levels = NULL
 ) {
-  # Aliases with explicit intent for readability.
-  mu_inv_softmax_base <- composition_intercept_by_taxon
-  log_dispersion_assoc <- mean_dispersion_assoc_slope
-  alpha_intercept_by_taxon <- dispersion_intercept_by_taxon
+  if (length(composition_intercept_by_taxon) != n_taxa) {
+    stop("composition_intercept_by_taxon must have length n_taxa.")
+  }
+  if (length(slope_effects_distribution) == 0L) {
+    stop("slope_effects_distribution is empty.")
+  }
+  alpha_intercept_by_taxon <- rep_len(dispersion_intercept_by_taxon, n_taxa)
 
-  # Composition and dispersion intercepts are taxon-length vectors.
-  if (length(mu_inv_softmax_base) != n_taxa) {
-    stop(
-      sprintf(
-        "composition_intercept_by_taxon must be length n_taxa=%d (got %d).",
-        n_taxa, length(mu_inv_softmax_base)
-      )
-    )
-  }
-  if (length(alpha_intercept_by_taxon) == 1) {
-    alpha_intercept_by_taxon <- rep(alpha_intercept_by_taxon, n_taxa)
-  }
-  if (length(alpha_intercept_by_taxon) != n_taxa) {
-    stop(
-      sprintf(
-        paste0(
-          "dispersion_intercept_by_taxon must be length n_taxa=%d ",
-          "(or scalar, which is expanded); got %d."
-        ),
-        n_taxa, length(alpha_intercept_by_taxon)
-      )
-    )
-  }
-
-  # Extract seed and n_da_taxa
   params <- extract_job_params(job_row)
   seed <- params$seed
   n_da <- params$n_da_taxa
 
-  # Ensure slope_effects_distribution is not empty
-  if (length(slope_effects_distribution) == 0) {
-    stop("slope_effects_distribution is empty - cannot sample from empty vector")
-  }
-
-  # Create slope vector
+  # Build slope vector: n_da random taxa get sampled empirical effects.
+  # Seed offset keeps DA picks stable per (seed, n_da) independent of count sampling.
   slope_vec <- rep(0, n_taxa)
   if (n_da > 0) {
     set.seed(seed + 10000)
-    da_indices <- sample(1:n_taxa, size = min(n_da, n_taxa), replace = FALSE)
-    slope_vec[da_indices] <- sample(slope_effects_distribution, length(da_indices), replace = TRUE)
+    da_idx <- sample.int(n_taxa, size = min(n_da, n_taxa))
+    slope_vec[da_idx] <- sample(slope_effects_distribution, length(da_idx),
+                                replace = TRUE)
     slope_vec <- slope_vec - mean(slope_vec)
   }
 
-  # Run simulation
-  sim_r <- simulate_compositional_bb( # nolint
+  sim_r <- simulate_compositional_bb(
     slope_vector = slope_vec,
-    mu_inv_softmax = mu_inv_softmax_base,
-    log_dispersion_assoc = log_dispersion_assoc,
+    mu_inv_softmax = composition_intercept_by_taxon,
+    log_dispersion_assoc = mean_dispersion_assoc_slope,
     n_taxa = n_taxa,
     n_samples = n_samples,
     sd_log_overdispersion = sd_log_overdispersion,
@@ -394,15 +268,12 @@ run_simulation_job_brito <- function(
     design_matrix = design_matrix_from_groups(n_samples_per_group),
     seed = seed
   )
-
-  # Add seed and n_da_taxa to simulation for tracking
   sim_r$seed <- seed
   sim_r$n_da_taxa <- n_da
 
   if (!is.null(group_levels)) {
     sim_r <- synthetic_sim_add_two_group_factor(sim_r, group_levels)
   }
-
   sim_r
 }
 
@@ -454,7 +325,6 @@ run_simulation_job_brito <- function(
 #' @seealso \code{\link{lighten_sweep_analysis_result_for_fpr}},
 #'   \code{\link{summarise_fpr}}.
 #' @keywords internal
-#' @importFrom purrr set_names imap imap_dfr
 #' @importFrom tibble tibble
 #' @importFrom vegan betadisper
 run_analysis_job <- function(
@@ -466,74 +336,52 @@ run_analysis_job <- function(
   standard_distance_methods = c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
 ) {
   if (!("group" %in% names(sim_r$sample_metadata))) {
-    stop(
-      "sim_r$sample_metadata must include factor column `group`. ",
-      "Add it in the Quarto document after simulation (see benchmark_*_paper_analyses*.qmd)."
-    )
+    stop("sim_r$sample_metadata must include factor column `group`. ",
+         "Add it in the Quarto document after simulation (see benchmark_*_paper_analyses*.qmd).")
   }
-  g <- sim_r$sample_metadata$group
-  if (!is.factor(g)) {
+  if (!is.factor(sim_r$sample_metadata$group)) {
     stop("sim_r$sample_metadata$group must be a factor (set in Quarto after simulation).")
   }
-  group_levels <- levels(g)
-  
-  seed <- sim_r$seed
-  n_da <- sim_r$n_da_taxa
-  
-  inputs_std <- purrr::set_names(
-    lapply(standard_distance_methods, \(dm) {
-      build_standard_betadisper_inputs_paper(
+  group_levels <- levels(sim_r$sample_metadata$group)
+  method_keys  <- paste0("permdisp_", standard_distance_methods)
+
+  method_results <- setNames(
+    lapply(standard_distance_methods, function(dm) {
+      inp <- build_standard_betadisper_inputs_paper(
         count_long = sim_r$count_long,
         sample_metadata = sim_r$sample_metadata,
         distance_method = dm,
         group_levels = group_levels
       )
+      bd   <- vegan::betadisper(inp$dist, inp$group)
+      stab <- permutest_betadisper_stable(bd, max_perm = max_perm, batch = batch,
+                                          target_se = target_se)
+      list(
+        method_key = paste0("permdisp_", dm),
+        bd         = bd,
+        group1    = unname(bd$group.distances[1]),
+        group2    = unname(bd$group.distances[2]),
+        delta     = unname(bd$group.distances[2] - bd$group.distances[1]),
+        p_value   = unname(stab$p_value),
+        p_se      = unname(stab$p_se),
+        n_perm    = unname(stab$n_perm),
+        distances = unname(bd$distances),
+        group     = bd$group
+      )
     }),
-    nm = paste0("permdisp_", standard_distance_methods)
+    method_keys
   )
 
-  # Run analysis for each method using adaptive permutations
-  method_results <- purrr::imap(inputs_std, \(inp, method_key) {
-    bd <- vegan::betadisper(inp$dist, inp$group)
-    
-    # Always use adaptive permutations for consistent methodology
-    stab <- permutest_betadisper_stable(bd, max_perm = max_perm, batch = batch, target_se = target_se)
-    p_value <- unname(stab$p_value)
-    p_se <- unname(stab$p_se)
-    n_perm <- unname(stab$n_perm)
-    
-    list(
-      method_key = method_key,
-      bd = bd,
-      group1 = unname(bd$group.distances[1]),
-      group2 = unname(bd$group.distances[2]),
-      delta = unname(bd$group.distances[2] - bd$group.distances[1]),
-      p_value = p_value,
-      p_se = p_se,
-      n_perm = n_perm,
-      distances = unname(bd$distances),
-      group = bd$group
-    )
-  })
-  
-  # Return format depends on return_full flag
   if (return_full) {
-    # Return full results for plotting
-    list(
-      method_results = method_results,
-      seed = seed,
-      n_da_taxa = n_da
-    )
+    list(method_results = method_results,
+         seed = sim_r$seed, n_da_taxa = sim_r$n_da_taxa)
   } else {
-    # Return minimal results for FPR calculations (sweeps)
-    purrr::imap_dfr(method_results, \(mr, method_key) {
-      tibble::tibble(
-        seed = seed,
-        n_da_taxa = n_da,
-        method = pretty_method_label_roc(method_key),
-        p_value = mr$p_value
-      )
-    })
+    tibble::tibble(
+      seed      = sim_r$seed,
+      n_da_taxa = sim_r$n_da_taxa,
+      method    = vapply(method_keys, pretty_method_label_roc, character(1L), USE.NAMES = FALSE),
+      p_value   = vapply(method_results, `[[`, numeric(1L), "p_value", USE.NAMES = FALSE)
+    )
   }
 }
 
@@ -616,51 +464,30 @@ lighten_sweep_analysis_result_for_fpr <- function(x) {
 #' @importFrom tibble tibble
 #' @importFrom rlang .data
 summarise_fpr <- function(sweep_results) {
-  # Handle case where targets auto-bound tibbles into a single tibble
-  if (is.data.frame(sweep_results) && all(c("seed", "n_da_taxa", "method", "p_value") %in% names(sweep_results))) {
+  if (is.data.frame(sweep_results) &&
+      all(c("seed", "n_da_taxa", "method", "p_value") %in% names(sweep_results))) {
     fpr_data <- sweep_results
   } else {
-    # Extract fpr from list structure
-    if (length(sweep_results) == 0) {
-      stop("sweep_results is empty")
-    }
-    
-    # Extract FPR data, handling mixed structures
-    fpr_list <- lapply(sweep_results, \(x) {
-      if (!is.list(x) || !("method_results" %in% names(x))) {
-        stop("summarise_fpr expects full analysis objects (return_full = TRUE).")
-      }
-      purrr::imap_dfr(x$method_results, \(mr, method_key) {
+    if (length(sweep_results) == 0L) stop("sweep_results is empty")
+    fpr_data <- dplyr::bind_rows(lapply(sweep_results, function(x) {
+      purrr::imap_dfr(x$method_results, function(mr, method_key) {
         tibble::tibble(
-          seed = x$seed,
+          seed      = x$seed,
           n_da_taxa = x$n_da_taxa,
           threshold = if ("threshold" %in% names(x)) x$threshold else NA_real_,
-          method = method_key,
-          p_value = mr$p_value
+          method    = method_key,
+          p_value   = mr$p_value
         )
       })
-    })
-    
-    # Remove NULLs and bind
-    fpr_list <- fpr_list[!sapply(fpr_list, is.null)]
-    
-    if (length(fpr_list) == 0) {
-      stop("No FPR data found in sweep_results")
-    }
-    
-    fpr_data <- dplyr::bind_rows(fpr_list)
+    }))
   }
-  
-  if (nrow(fpr_data) == 0) {
-    stop("No FPR data extracted from sweep_results")
-  }
-  
+
   fpr_data %>%
     dplyr::group_by(.data$n_da_taxa, .data$method, .data$threshold) %>%
     dplyr::summarise(
       n_sims = dplyr::n(),
-      n_fp = sum(.data$p_value < 0.05, na.rm = TRUE),
-      FPR = sum(.data$p_value < 0.05, na.rm = TRUE) / dplyr::n(),
+      n_fp   = sum(.data$p_value < 0.05, na.rm = TRUE),
+      FPR    = n_fp / n_sims,
       .groups = "drop"
     )
 }

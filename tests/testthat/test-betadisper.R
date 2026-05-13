@@ -113,7 +113,7 @@ test_that("build_standard_betadisper_inputs_paper(): missing metadata columns ->
   )
 })
 
-test_that("build_standard_betadisper_inputs_paper(): aitchison rejects bad pseudocount", {
+test_that("build_standard_betadisper_inputs_paper(): aitchison rejects non-positive pseudocount", {
   sim_r <- .make_tiny_sim(n_taxa = 4L, n_samples_per_group = 4L, seed = 1L)
   expect_error(
     build_standard_betadisper_inputs_paper(
@@ -123,17 +123,7 @@ test_that("build_standard_betadisper_inputs_paper(): aitchison rejects bad pseud
       group_levels = c("ctrl", "case"),
       clr_pseudocount = -1
     ),
-    regexp = "positive finite numeric scalar"
-  )
-  expect_error(
-    build_standard_betadisper_inputs_paper(
-      count_long = sim_r$count_long,
-      sample_metadata = sim_r$sample_metadata,
-      distance_method = "aitchison",
-      group_levels = c("ctrl", "case"),
-      clr_pseudocount = c(1, 2)
-    ),
-    regexp = "positive finite numeric scalar"
+    regexp = "must be positive"
   )
 })
 

@@ -38,13 +38,20 @@
 #'   \code{\link{pretty_method_label_box}}.
 #' @keywords internal
 pretty_method_label <- function(method_key) {
-  if (method_key == "permdisp_bray" || method_key == "bray") return("Bray\u2013Curtis")
-  if (method_key == "permdisp_jaccard" || method_key == "jaccard") return("Jaccard")
-  if (method_key == "permdisp_hellinger" || method_key == "hellinger") return("Hellinger")
-  if (method_key == "permdisp_aitchison" || method_key == "aitchison") return("Aitchison")
-  if (method_key == "permdisp_robust.aitchison" || method_key == "robust.aitchison") return("robust Aitchison")
-  if (method_key == "permdisp_euclidean") return("Euclidean")
-  return(method_key)
+  labels <- c(
+    bray                      = "Bray\u2013Curtis",
+    permdisp_bray             = "Bray\u2013Curtis",
+    jaccard                   = "Jaccard",
+    permdisp_jaccard          = "Jaccard",
+    hellinger                 = "Hellinger",
+    permdisp_hellinger        = "Hellinger",
+    aitchison                 = "Aitchison",
+    permdisp_aitchison        = "Aitchison",
+    robust.aitchison          = "robust Aitchison",
+    permdisp_robust.aitchison = "robust Aitchison",
+    permdisp_euclidean        = "Euclidean"
+  )
+  if (method_key %in% names(labels)) unname(labels[method_key]) else method_key
 }
 
 #' Pretty method label for ROC-curve legends (currently an alias)

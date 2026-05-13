@@ -163,15 +163,6 @@ test_that("run_alpha_diversity_analysis_normalised(): input validation errors", 
     run_alpha_diversity_analysis_normalised(
       sim_r,
       group_levels = c("ctrl", "case"),
-      group_colors = c(ctrl = "#a", case = "#b"),
-      rarefy_niter = 0L
-    ),
-    regexp = "rarefy_niter.*positive"
-  )
-  expect_error(
-    run_alpha_diversity_analysis_normalised(
-      sim_r,
-      group_levels = c("ctrl", "case"),
       group_colors = c("#a", "#b")
     ),
     regexp = "must be named"

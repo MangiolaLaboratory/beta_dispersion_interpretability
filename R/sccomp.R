@@ -6,8 +6,6 @@
 # in the correct dependency order.
 #
 # Dependencies (see @importFrom on each function):
-#   dplyr  - filter, pull
-#   rlang  - .data (NSE pronoun)
 #   stats  - sd
 #   Other inputs come from sccomp::sccomp_estimate() results (the `fit` object
 #   uses CmdStanR-style `$metadata()` and `$summary()` methods).
@@ -49,50 +47,32 @@
 #'   consume the values returned here.
 #' @keywords internal
 extract_precision_trend_params <- function(fit) {
-  fit_vars <- tryCatch(
-    fit$metadata()$stan_variables,
-    error = function(e) character()
-  )
+  fit_vars <- fit$metadata()$stan_variables
 
-  # sccomp: indexed prec_intercept_j / prec_slope_j (e.g. bimodal); use j = 1, else j = 2.
-  pick_indexed_prec <- function(j) {
-    pi <- paste0("prec_intercept_", j)
-    ps <- paste0("prec_slope_", j)
-    if (pi %in% fit_vars && ps %in% fit_vars) {
-      int_s <- fit$summary(pi)
-      slo_s <- fit$summary(ps)
-      list(
-        prec_intercept = int_s$mean[1],
-        prec_slope = slo_s$mean[1],
-        k_sd_real = slo_s$sd[1],
-        slope_parameter = ps
-      )
-    } else {
-      NULL
+  # Try modern indexed names first (j = 1, then 2), fall back to legacy
+  # unindexed `prec_intercept` + first `prec_slope*` match.
+  for (j in c(1L, 2L)) {
+    int_name <- paste0("prec_intercept_", j)
+    slo_name <- paste0("prec_slope_",     j)
+    if (int_name %in% fit_vars && slo_name %in% fit_vars) {
+      int_s <- fit$summary(int_name)
+      slo_s <- fit$summary(slo_name)
+      return(list(
+        prec_intercept  = int_s$mean[1],
+        prec_slope      = slo_s$mean[1],
+        k_sd_real       = slo_s$sd[1],
+        slope_parameter = slo_name
+      ))
     }
   }
-  out <- pick_indexed_prec(1L)
-  if (!is.null(out)) {
-    return(out)
-  }
-  out <- pick_indexed_prec(2L)
-  if (!is.null(out)) {
-    return(out)
-  }
-
-  # Older sccomp: scalar prec_intercept + prec_slope* (unindexed name).
-    slope_vars <- sort(grep("^prec_slope", fit_vars, value = TRUE))
-
-    slope_parameter <- slope_vars[[1]]
-    prec_intercept <- fit$summary("prec_intercept")$mean[1]
-    slope_summary <- fit$summary(slope_parameter)
-    return(list(
-      prec_intercept = prec_intercept,
-      prec_slope = slope_summary$mean[1],
-      k_sd_real = slope_summary$sd[1],
-      slope_parameter = slope_parameter
-    ))
-
+  slope_name <- sort(grep("^prec_slope", fit_vars, value = TRUE))[[1]]
+  slo_s <- fit$summary(slope_name)
+  list(
+    prec_intercept  = fit$summary("prec_intercept")$mean[1],
+    prec_slope      = slo_s$mean[1],
+    k_sd_real       = slo_s$sd[1],
+    slope_parameter = slope_name
+  )
 }
 
 #' Summarise per-sample library sizes from an sccomp model input
@@ -134,12 +114,11 @@ library_size_from_sccomp_model_input <- function(model_input) {
   }
   m <- mean(ex)
   s <- stats::sd(ex)
-  if (!is.finite(s) || s <= 0) {
-    s <- max(0.05 * m, 1)
-  } else {
-    s <- max(s, 0.05 * m)
-  }
-  list(library_size_mean = m, library_size_sd = s)
+  # Floor SD at 5% of the mean to avoid pathologically tight or degenerate
+  # library-size distributions when extracting from real cohorts.
+  s_floor <- max(0.05 * m, 1)
+  list(library_size_mean = m,
+       library_size_sd   = if (is.finite(s) && s > 0) max(s, s_floor) else s_floor)
 }
 
 #' Pick simulation library-size parameters with a safe default
@@ -222,87 +201,53 @@ library_size_from_sccomp_model_input <- function(model_input) {
 #' @seealso \code{\link{build_simulation_params_brito}} which consumes this
 #'   output; \code{\link{library_size_from_sccomp_model_input}}.
 #' @keywords internal
-#' @importFrom dplyr filter pull
-#' @importFrom rlang .data
 extract_sccomp_params_brito <- function(
     result,
-    use_precision_trend_from_fit = FALSE,
+    use_precision_trend_from_fit = FALSE,  # kept for back-compat; ignored
     target_parameter = NULL) {
   model_input <- attr(result, "model_input")
-
   if (!is.null(model_input) && is.list(model_input)) {
     n_samples_real <- model_input$N
-    n_taxa_real <- model_input$M
+    n_taxa_real    <- model_input$M
   } else {
-    n_taxa_real <- length(unique(result$cell_group))
     n_samples_real <- 178
+    n_taxa_real    <- length(unique(result$cell_group))
   }
 
-  # `use_precision_trend_from_fit` is kept only for backward compatibility.
-  k_real <- 0
-  k_sd_real <- NA_real_
-  c_real <- NA_real_
-  prec_sd_real <- NA_real_
-
-  intercept_effects <- result %>%
-    filter(.data$parameter == "Intercept") %>%
-    pull(.data$c_effect)
-
-  group_parameter <- result %>%
-    dplyr::filter(.data$parameter != "Intercept") %>%
-    dplyr::pull(.data$parameter) %>%
-    unique()
-  if (length(group_parameter) == 0) {
+  non_intercept <- unique(result$parameter[result$parameter != "Intercept"])
+  if (length(non_intercept) == 0L) {
     stop("No non-intercept parameter found in sccomp result.")
   }
-  # Pick the requested non-intercept term, or default to the first one.
-  # `c(NULL, x)[1] == x[1]`, so leaving target_parameter NULL preserves prior behaviour.
-  group_parameter <- c(target_parameter, group_parameter[1])[1]
-  stopifnot(group_parameter %in% unique(result$parameter))
+  group_parameter <- if (is.null(target_parameter)) non_intercept[1] else target_parameter
+  if (!group_parameter %in% result$parameter) {
+    stop("group_parameter '", group_parameter, "' not present in sccomp result.")
+  }
 
-  slope_effects <- result %>%
-    filter(.data$parameter == group_parameter) %>%
-    pull(.data$c_effect)
-
-  slope_data <- result %>%
-    filter(.data$parameter == group_parameter)
-
-  slope_effects_significant <- slope_data %>%
-    filter(.data$c_lower > 0 | .data$c_upper < 0) %>%
-    pull(.data$c_effect)
-
-  v_intercept <- result %>%
-    filter(.data$parameter == "Intercept") %>%
-    pull(.data$v_effect)
-
-  v_slope <- result %>%
-    filter(.data$parameter == group_parameter) %>%
-    pull(.data$v_effect)
+  int_rows <- result[result$parameter == "Intercept",       , drop = FALSE]
+  slp_rows <- result[result$parameter == group_parameter,   , drop = FALSE]
+  sig_mask <- slp_rows$c_lower > 0 | slp_rows$c_upper < 0
 
   lib_ls <- library_size_from_sccomp_model_input(model_input)
 
-  # sccomp variability follows precision parameterization phi = exp(-v_effect).
-  # Simulator uses sigma as dispersion with concentration kappa = 1/sigma.
-  # To preserve semantics (higher precision -> lower dispersion), map to
-  # log(sigma) = v_effect, i.e. sigma = exp(v_effect) = 1 / exp(-v_effect).
-  alpha_intercept_effects <- v_intercept
-
+  # sccomp variability: precision phi = exp(-v_effect). Simulator's dispersion
+  # sigma has concentration kappa = 1/sigma; mapping log(sigma) = v_effect
+  # preserves "higher precision -> lower dispersion".
   list(
-    n_samples_real = n_samples_real,
-    n_taxa_real = n_taxa_real,
-    k_real = k_real,
-    k_sd_real = k_sd_real,
-    c_real = c_real,
-    prec_sd_real = prec_sd_real,
-    intercept_effects = intercept_effects,
-    slope_effects = slope_effects,
-    slope_effects_significant = slope_effects_significant,
-    v_intercept = v_intercept,
-    v_slope = v_slope,
-    alpha_intercept_effects = alpha_intercept_effects,
-    group_parameter = group_parameter,
-    library_size_mean = lib_ls$library_size_mean,
-    library_size_sd = lib_ls$library_size_sd
+    n_samples_real            = n_samples_real,
+    n_taxa_real               = n_taxa_real,
+    k_real                    = 0,
+    k_sd_real                 = NA_real_,
+    c_real                    = NA_real_,
+    prec_sd_real              = NA_real_,
+    intercept_effects         = int_rows$c_effect,
+    slope_effects             = slp_rows$c_effect,
+    slope_effects_significant = slp_rows$c_effect[sig_mask],
+    v_intercept               = int_rows$v_effect,
+    v_slope                   = slp_rows$v_effect,
+    alpha_intercept_effects   = int_rows$v_effect,
+    group_parameter           = group_parameter,
+    library_size_mean         = lib_ls$library_size_mean,
+    library_size_sd           = lib_ls$library_size_sd
   )
 }
 
@@ -365,74 +310,54 @@ build_simulation_params_brito <- function(
   group_levels,
   n_samples_per_group = NULL
 ) {
-  if (length(group_levels) != 2) {
+  if (length(group_levels) != 2L) {
     stop("group_levels must have length 2 (Group==0 then Group==1 in design_matrix_from_groups).")
   }
-  set.seed(123)
-  n_taxa <- sccomp_params$n_taxa_real
   if (is.null(n_samples_per_group)) {
     n_samples_per_group <- floor(sccomp_params$n_samples_real / 2)
   }
   if (!length(n_samples_per_group) %in% c(1L, 2L)) {
     stop("n_samples_per_group must be length 1 (balanced) or length 2 (per-group counts).")
   }
-  n_groups <- 2
-  n_samples <- if (length(n_samples_per_group) == 1L) {
-    n_samples_per_group * n_groups
-  } else {
-    sum(n_samples_per_group)
+  if (length(sccomp_params$intercept_effects) != length(sccomp_params$alpha_intercept_effects)) {
+    stop("intercept_effects and alpha_intercept_effects must have the same length ",
+         "for paired resampling.")
   }
 
-  lib_def <- .sim_library_size_or_default(sccomp_params)
-  library_size_mean <- lib_def$library_size_mean
-  library_size_sd <- lib_def$library_size_sd
+  n_taxa    <- sccomp_params$n_taxa_real
+  n_samples <- if (length(n_samples_per_group) == 1L) 2L * n_samples_per_group
+               else sum(n_samples_per_group)
+  lib       <- .sim_library_size_or_default(sccomp_params)
 
-  # Preserve taxon-level dependence between composition and variability intercepts
-  # by resampling paired (c_intercept, alpha_intercept) rows together.
-  n_intercept_rows <- length(sccomp_params$intercept_effects)
-  if (n_intercept_rows != length(sccomp_params$alpha_intercept_effects)) {
-    stop(
-      "intercept_effects and alpha_intercept_effects must have the same length ",
-      "for paired resampling."
-    )
-  }
-  paired_idx <- sample.int(n_intercept_rows, size = n_taxa, replace = TRUE)
-  sampled_intercepts <- sccomp_params$intercept_effects[paired_idx]
-  sampled_alpha <- sccomp_params$alpha_intercept_effects[paired_idx]
-
-  mu_inv_softmax_base_realistic <- sampled_intercepts - mean(sampled_intercepts)
-
-  # Use empirical alpha-intercept values (paired with sampled composition
-  # intercepts) to set taxon-level log(sigma) intercepts.
-  intercept_disp_realistic <- mean(sampled_alpha)
-  intercept_disp_realistic_taxon <- sampled_alpha
-  sd_log_overdispersion_realistic <- stats::sd(sampled_alpha)
-  sigma_realistic <- exp(intercept_disp_realistic)
-
+  # Paired resampling: keep empirical (composition, variability) dependence.
+  # Two `set.seed(123)` calls (one per sample()) are deliberate: they make the
+  # paired-intercept draw and the slope draw each start from the same fixed
+  # state, so the two are independently reproducible.
   set.seed(123)
-  slope_realistic <- sample(sccomp_params$slope_effects, n_taxa, replace = TRUE)
-  slope_realistic <- slope_realistic - mean(slope_realistic)
-
-  perm_reps_auc <- 199
-  rep_seeds_auc <- 12000 + seq_len(n_reps_auc)
+  paired_idx         <- sample.int(length(sccomp_params$intercept_effects),
+                                   size = n_taxa, replace = TRUE)
+  sampled_intercepts <- sccomp_params$intercept_effects[paired_idx]
+  sampled_alpha      <- sccomp_params$alpha_intercept_effects[paired_idx]
+  set.seed(123)
+  slope_realistic    <- sample(sccomp_params$slope_effects, n_taxa, replace = TRUE)
 
   list(
-    n_taxa = n_taxa,
-    n_samples_per_group = n_samples_per_group,
-    n_groups = n_groups,
-    n_samples = n_samples,
-    group_levels = group_levels,
-    library_size_mean = library_size_mean,
-    library_size_sd = library_size_sd,
-    mu_inv_softmax_base_realistic = mu_inv_softmax_base_realistic,
-    intercept_disp_realistic = intercept_disp_realistic,
-    intercept_disp_realistic_taxon = intercept_disp_realistic_taxon,
-    sigma_realistic = sigma_realistic,
-    slope_realistic = slope_realistic,
-    sd_log_overdispersion_realistic = sd_log_overdispersion_realistic,
-    alpha_intercept_sampled = sampled_alpha,
-    n_reps_auc = n_reps_auc,
-    perm_reps_auc = perm_reps_auc,
-    rep_seeds_auc = rep_seeds_auc
+    n_taxa                          = n_taxa,
+    n_samples_per_group             = n_samples_per_group,
+    n_groups                        = 2L,
+    n_samples                       = n_samples,
+    group_levels                    = group_levels,
+    library_size_mean               = lib$library_size_mean,
+    library_size_sd                 = lib$library_size_sd,
+    mu_inv_softmax_base_realistic   = sampled_intercepts - mean(sampled_intercepts),
+    intercept_disp_realistic        = mean(sampled_alpha),
+    intercept_disp_realistic_taxon  = sampled_alpha,
+    sigma_realistic                 = exp(mean(sampled_alpha)),
+    slope_realistic                 = slope_realistic - mean(slope_realistic),
+    sd_log_overdispersion_realistic = stats::sd(sampled_alpha),
+    alpha_intercept_sampled         = sampled_alpha,
+    n_reps_auc                      = n_reps_auc,
+    perm_reps_auc                   = 199,
+    rep_seeds_auc                   = 12000 + seq_len(n_reps_auc)
   )
 }

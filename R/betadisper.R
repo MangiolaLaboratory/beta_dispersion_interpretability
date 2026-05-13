@@ -8,10 +8,9 @@
 # Dependencies (see @importFrom on each function):
 #   vegan   - permutest, vegdist, decostand
 #   stats   - dist
-#   dplyr   - select, filter, arrange, pull
+#   dplyr   - select
 #   tidyr   - pivot_wider
 #   tibble  - column_to_rownames
-#   rlang   - .data
 #
 # =============================================================================
 
@@ -79,25 +78,19 @@ permutest_betadisper_fixed <- function(bd, permutations = 999) {
 #' @keywords internal
 #' @importFrom vegan permutest
 permutest_betadisper_stable <- function(bd, max_perm = 99999, batch = 5000, target_se = 0.0025) {
-  if (!is.numeric(max_perm) || length(max_perm) != 1 || max_perm < 999) stop("max_perm must be >= 999")
-  if (!is.numeric(batch) || length(batch) != 1 || batch < 100) stop("batch must be >= 100")
-  if (!is.numeric(target_se) || length(target_se) != 1 || target_se <= 0) stop("target_se must be > 0")
+  if (max_perm  < 999) stop("max_perm must be >= 999")
+  if (batch     < 100) stop("batch must be >= 100")
+  if (target_se <= 0)  stop("target_se must be > 0")
 
-  m <- 0L
-  p <- NA_real_
+  m  <- 0L
+  p  <- NA_real_
   se <- Inf
-
   while (m < max_perm && se > target_se) {
-    m <- as.integer(min(max_perm, m + batch))
+    m  <- as.integer(min(max_perm, m + batch))
     pt <- vegan::permutest(bd, pairwise = TRUE, permutations = m)
-    p <- unname(pt$tab$`Pr(>F)`[1])
-    if (!is.finite(p)) {
-      se <- Inf
-    } else {
-      se <- sqrt(p * (1 - p) / m)
-    }
+    p  <- unname(pt$tab$`Pr(>F)`[1])
+    se <- if (is.finite(p)) sqrt(p * (1 - p) / m) else Inf
   }
-
   list(p_value = p, p_se = se, n_perm = m)
 }
 
@@ -149,12 +142,11 @@ permutest_betadisper_stable <- function(bd, max_perm = 99999, batch = 5000, targ
 #'
 #' @seealso \code{\link{run_analysis_job}} for the main consumer.
 #' @keywords internal
-#' @importFrom dplyr select filter arrange pull
+#' @importFrom dplyr select all_of
 #' @importFrom tidyr pivot_wider
 #' @importFrom tibble column_to_rownames
 #' @importFrom vegan vegdist decostand
 #' @importFrom stats dist
-#' @importFrom rlang .data
 build_standard_betadisper_inputs_paper <- function(
   count_long,
   sample_metadata,
@@ -162,12 +154,11 @@ build_standard_betadisper_inputs_paper <- function(
   group_levels,
   clr_pseudocount = 1
 ) {
-  required_cols <- c("sample_id", "taxon_id", "count")
-  missing_cols <- setdiff(required_cols, colnames(count_long))
-  if (length(missing_cols) > 0) {
+  missing_cols <- setdiff(c("sample_id", "taxon_id", "count"), colnames(count_long))
+  if (length(missing_cols) > 0L) {
     stop("count_long is missing columns: ", paste(missing_cols, collapse = ", "))
   }
-  if (!("sample_id" %in% colnames(sample_metadata)) || !("group" %in% colnames(sample_metadata))) {
+  if (!all(c("sample_id", "group") %in% colnames(sample_metadata))) {
     stop("sample_metadata must contain columns: sample_id, group")
   }
 
@@ -176,41 +167,33 @@ build_standard_betadisper_inputs_paper <- function(
     tidyr::pivot_wider(names_from = "taxon_id", values_from = "count") %>%
     tibble::column_to_rownames("sample_id") %>%
     as.matrix()
+  count_matrix <- count_matrix[rowSums(count_matrix) > 0, , drop = FALSE]
 
-  nonzero_samples <- rowSums(count_matrix) > 0
-  count_matrix <- count_matrix[nonzero_samples, , drop = FALSE]
+  dist_obj <- switch(
+    distance_method,
+    "aitchison" = ,
+    "robust.aitchison" = {
+      if (clr_pseudocount <= 0) stop("clr_pseudocount must be positive.")
+      vegan::vegdist(pmax(count_matrix, clr_pseudocount), method = distance_method)
+    },
+    "hellinger" = stats::dist(
+      vegan::decostand(count_matrix, method = "hellinger", MARGIN = 1),
+      method = "euclidean"
+    ),
+    "jaccard" = vegan::vegdist(
+      vegan::decostand(count_matrix, method = "total", MARGIN = 1),
+      method = "jaccard", binary = FALSE
+    ),
+    vegan::vegdist(count_matrix, method = distance_method)  # default branch
+  )
 
-  if (distance_method %in% c("aitchison", "robust.aitchison")) {
-    if (!is.numeric(clr_pseudocount) || length(clr_pseudocount) != 1 || !is.finite(clr_pseudocount) || clr_pseudocount <= 0) {
-      stop("clr_pseudocount must be a positive finite numeric scalar (or NULL).")
-    }
-    if (any(count_matrix <= 0, na.rm = TRUE)) {
-      count_matrix[count_matrix <= 0] <- clr_pseudocount
-    }
-  }
-
-  if (distance_method == "jaccard") {
-    count_matrix <- vegan::decostand(count_matrix, method = "total", MARGIN = 1)
-  }
-
-  dist_obj <- if (distance_method == "hellinger") {
-    hel <- vegan::decostand(count_matrix, method = "hellinger", MARGIN = 1)
-    stats::dist(hel, method = "euclidean")
-  } else if (distance_method == "jaccard") {
-    vegan::vegdist(count_matrix, method = "jaccard", binary = FALSE)
-  } else {
-    vegan::vegdist(count_matrix, method = distance_method)
-  }
-
-  if (any(is.na(dist_obj)) || any(is.infinite(dist_obj))) {
+  if (any(!is.finite(dist_obj))) {
     stop("Distance matrix contains NA/Inf values.")
   }
 
-  group_factor <- sample_metadata %>%
-    dplyr::filter(.data$sample_id %in% rownames(count_matrix)) %>%
-    dplyr::arrange(match(.data$sample_id, rownames(count_matrix))) %>%
-    dplyr::pull(.data$group) %>%
-    factor(levels = group_levels)
-
+  group_factor <- factor(
+    sample_metadata$group[match(rownames(count_matrix), sample_metadata$sample_id)],
+    levels = group_levels
+  )
   list(dist = dist_obj, group = group_factor)
 }

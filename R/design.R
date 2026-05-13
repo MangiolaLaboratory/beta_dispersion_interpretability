@@ -79,13 +79,8 @@ synthetic_sim_add_two_group_factor <- function(sim_r, group_levels) {
   if (length(group_levels) != 2) {
     stop("group_levels must have length 2 (first = Group 0, second = Group 1).")
   }
-  sim_r$sample_metadata$group <- factor(
-    ifelse(sim_r$sample_metadata$Group == 1L, group_levels[[2]], group_levels[[1]]),
-    levels = group_levels
-  )
-  sim_r$count_long$group <- factor(
-    ifelse(sim_r$count_long$Group == 1L, group_levels[[2]], group_levels[[1]]),
-    levels = group_levels
-  )
+  to_factor <- function(g) factor(group_levels[g + 1L], levels = group_levels)
+  sim_r$sample_metadata$group <- to_factor(sim_r$sample_metadata$Group)
+  sim_r$count_long$group      <- to_factor(sim_r$count_long$Group)
   sim_r
 }

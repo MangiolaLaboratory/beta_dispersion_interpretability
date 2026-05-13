@@ -47,6 +47,33 @@
 #' @param plot_subtitle Character; goes into the plot subtitle (used to
 #'   indicate rarefaction settings).
 #'
+#' Validate (group_levels, group_colors) argument pair (internal)
+#'
+#' Centralises the per-function argument checking shared by
+#' \code{run_alpha_diversity_analysis()} and its rarefied variant. Returns
+#' the cleaned-up character vector + named colour vector so the callers can
+#' use them directly.
+#' @noRd
+.validate_group_args <- function(group_levels, group_colors, fn_label) {
+  if (missing(group_levels) || missing(group_colors)) {
+    stop(fn_label, "() requires `group_levels` and `group_colors`.", call. = FALSE)
+  }
+  if (is.null(names(group_colors))) {
+    stop(fn_label, "(): `group_colors` must be named (names = group levels).",
+         call. = FALSE)
+  }
+  gl   <- as.character(group_levels)
+  miss <- setdiff(gl, names(group_colors))
+  if (length(miss) > 0L) {
+    stop(fn_label, "(): `group_colors` missing names for: ",
+         paste(miss, collapse = ", "), call. = FALSE)
+  }
+  list(
+    group_levels = gl,
+    group_colors = setNames(unname(group_colors[gl]), gl)
+  )
+}
+
 #' @return Named list with \code{data} (echo of input), \code{summary} (per
 #'   group means / SDs), \code{tests} (list of three t-test objects), and
 #'   \code{plot} (a \code{ggplot}).
@@ -151,37 +178,13 @@ run_alpha_diversity_analysis <- function(
   group_levels,
   group_colors
 ) {
-  if (missing(group_levels) || missing(group_colors)) {
-    stop(
-      "run_alpha_diversity_analysis() requires `group_levels` and `group_colors` ",
-      "(define them in the Quarto document that runs the analysis).",
-      call. = FALSE
-    )
-  }
-
-  gl <- as.character(group_levels)
-  if (length(gl) < 1L) {
-    stop("run_alpha_diversity_analysis(): `group_levels` must be non-empty.", call. = FALSE)
-  }
-  if (is.null(names(group_colors)) || any(names(group_colors) == "")) {
-    stop("run_alpha_diversity_analysis(): `group_colors` must be named (names = group levels).", call. = FALSE)
-  }
-  miss_col <- setdiff(gl, names(group_colors))
-  if (length(miss_col) > 0) {
-    stop(
-      "run_alpha_diversity_analysis(): `group_colors` missing names for: ",
-      paste(miss_col, collapse = ", "),
-      call. = FALSE
-    )
-  }
-  group_colors <- unname(group_colors[gl])
-  names(group_colors) <- gl
+  v <- .validate_group_args(group_levels, group_colors, "run_alpha_diversity_analysis")
+  gl <- v$group_levels
+  group_colors <- v$group_colors
 
   count_long <- sim_result$count_long
-
-  required_cols <- c("sample_id", "group", "count")
-  missing_cols <- setdiff(required_cols, colnames(count_long))
-  if (length(missing_cols) > 0) {
+  missing_cols <- setdiff(c("sample_id", "group", "count"), colnames(count_long))
+  if (length(missing_cols) > 0L) {
     stop("sim_result$count_long is missing columns: ", paste(missing_cols, collapse = ", "))
   }
 
@@ -199,9 +202,10 @@ run_alpha_diversity_analysis <- function(
     ) %>%
     dplyr::mutate(group = factor(group, levels = gl))
 
-  plot_subtitle <- "Points = samples, Ellipses = 95% confidence intervals"
-
-  .alpha_diversity_table_to_plot(alpha_data, case_label, group_colors, plot_subtitle)
+  .alpha_diversity_table_to_plot(
+    alpha_data, case_label, group_colors,
+    plot_subtitle = "Points = samples, Ellipses = 95% confidence intervals"
+  )
 }
 
 #' Alpha-diversity analysis with iterative rarefaction (depth-controlled)
@@ -261,98 +265,49 @@ run_alpha_diversity_analysis_normalised <- function(
   rarefy_niter = 50L,
   rarefy_sample = NULL
 ) {
-  if (missing(group_levels) || missing(group_colors)) {
-    stop(
-      "run_alpha_diversity_analysis_normalised() requires `group_levels` and `group_colors`.",
-      call. = FALSE
-    )
-  }
-
-  gl <- as.character(group_levels)
-  if (length(gl) < 1L) {
-    stop("run_alpha_diversity_analysis_normalised(): `group_levels` must be non-empty.", call. = FALSE)
-  }
-  if (is.null(names(group_colors)) || any(names(group_colors) == "")) {
-    stop("run_alpha_diversity_analysis_normalised(): `group_colors` must be named.", call. = FALSE)
-  }
-  miss_col <- setdiff(gl, names(group_colors))
-  if (length(miss_col) > 0) {
-    stop(
-      "run_alpha_diversity_analysis_normalised(): `group_colors` missing names for: ",
-      paste(miss_col, collapse = ", "),
-      call. = FALSE
-    )
-  }
-  group_colors <- unname(group_colors[gl])
-  names(group_colors) <- gl
-
-  if (!is.numeric(rarefy_niter) || length(rarefy_niter) != 1L || rarefy_niter < 1L) {
-    stop("run_alpha_diversity_analysis_normalised(): `rarefy_niter` must be a positive integer.", call. = FALSE)
-  }
-  rarefy_niter <- as.integer(rarefy_niter)
-
-  if (!requireNamespace("mia", quietly = TRUE)) {
-    stop("run_alpha_diversity_analysis_normalised() requires package `mia`.", call. = FALSE)
-  }
-  if (!requireNamespace("SummarizedExperiment", quietly = TRUE)) {
-    stop("run_alpha_diversity_analysis_normalised() requires package `SummarizedExperiment`.", call. = FALSE)
-  }
+  v <- .validate_group_args(group_levels, group_colors,
+                            "run_alpha_diversity_analysis_normalised")
+  gl <- v$group_levels
+  group_colors <- v$group_colors
 
   count_long <- sim_result$count_long
-  required_cols <- c("sample_id", "group", "count", "taxon_id")
-  missing_cols <- setdiff(required_cols, colnames(count_long))
-  if (length(missing_cols) > 0) {
-    stop("sim_result$count_long is missing columns: ", paste(missing_cols, collapse = ", "))
-  }
 
+  # taxon-by-sample count matrix, samples in matrix-column order
   wide <- count_long %>%
     dplyr::select("sample_id", "taxon_id", "count") %>%
-    tidyr::pivot_wider(names_from = "sample_id", values_from = "count", values_fill = 0)
-  taxa_ids <- wide$taxon_id
+    tidyr::pivot_wider(names_from = "sample_id", values_from = "count",
+                        values_fill = 0)
   mat <- as.matrix(wide[, -1, drop = FALSE])
-  rownames(mat) <- taxa_ids
-  grp_tbl <- count_long %>%
-    dplyr::group_by(.data$sample_id) %>%
-    dplyr::summarise(group = dplyr::first(.data$group), .groups = "drop")
+  rownames(mat) <- wide$taxon_id
   sample_order <- colnames(mat)
-  grp_ord <- grp_tbl[match(sample_order, grp_tbl$sample_id), , drop = FALSE]
-  if (anyNA(grp_ord$group)) {
-    stop("run_alpha_diversity_analysis_normalised(): could not resolve `group` for all samples.", call. = FALSE)
-  }
-  depth_each <- colSums(mat, na.rm = TRUE)
-  depth <- if (is.null(rarefy_sample)) min(depth_each, na.rm = TRUE) else rarefy_sample
-  if (!is.numeric(depth) || length(depth) != 1L || !is.finite(depth) || depth <= 0) {
-    stop("run_alpha_diversity_analysis_normalised(): invalid `rarefy_sample` / library size.", call. = FALSE)
-  }
-  if (any(depth_each < depth)) {
-    stop(
-      "run_alpha_diversity_analysis_normalised(): rarefaction depth (", depth,
-      ") exceeds total counts for at least one sample.",
-      call. = FALSE
-    )
-  }
-  col_df <- S4Vectors::DataFrame(group = factor(grp_ord$group, levels = gl))
+  group_per_sample <- count_long$group[match(sample_order, count_long$sample_id)]
+
+  # Rarefy to the shallowest sample (or the user-supplied depth).
+  depth <- if (is.null(rarefy_sample)) min(colSums(mat)) else rarefy_sample
+
+  col_df <- S4Vectors::DataFrame(group = factor(group_per_sample, levels = gl))
   rownames(col_df) <- sample_order
-  se <- SummarizedExperiment::SummarizedExperiment(assays = list(counts = mat), colData = col_df)
+  se <- SummarizedExperiment::SummarizedExperiment(
+    assays = list(counts = mat), colData = col_df
+  )
   alpha_df <- mia::getAlpha(
-    se,
-    assay.type = "counts",
+    se, assay.type = "counts",
     index = c("observed", "shannon", "pielou"),
-    niter = rarefy_niter,
-    sample = depth
+    niter = rarefy_niter, sample = depth
   )
   alpha_data <- tibble::tibble(
-    sample_id = sample_order,
-    group = factor(grp_ord$group, levels = gl),
-    richness = as.numeric(alpha_df$observed),
-    shannon = as.numeric(alpha_df$shannon),
+    sample_id       = sample_order,
+    group           = factor(group_per_sample, levels = gl),
+    richness        = as.numeric(alpha_df$observed),
+    shannon         = as.numeric(alpha_df$shannon),
     pielou_evenness = as.numeric(alpha_df$pielou)
   )
-  plot_subtitle <- paste0(
-    "Rarefied (mia::getAlpha, niter = ", rarefy_niter, ", depth = ", depth, "); ",
-    "points = samples, ellipses = 95% CI"
+  .alpha_diversity_table_to_plot(
+    alpha_data, case_label, group_colors,
+    plot_subtitle = paste0(
+      "Rarefied (mia::getAlpha, niter = ", rarefy_niter,
+      ", depth = ", depth, "); points = samples, ellipses = 95% CI"
+    )
   )
-
-  .alpha_diversity_table_to_plot(alpha_data, case_label, group_colors, plot_subtitle)
 }
 

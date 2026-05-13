@@ -30,10 +30,8 @@
 #'   also accepts vectors.
 #' @keywords internal
 softmax <- function(log_linear_predictors) {
-  exp_log <- exp(log_linear_predictors)
-  row_sums <- rowSums(exp_log)
-  probabilities <- exp_log / row_sums
-  return(probabilities)
+  e <- exp(log_linear_predictors)
+  e / rowSums(e)
 }
 
 #' Clamp values into the open unit interval \eqn{[\epsilon, 1-\epsilon]}
@@ -51,9 +49,7 @@ softmax <- function(log_linear_predictors) {
 #'   \code{[eps, 1 - eps]}.
 #' @noRd
 .clamp01 <- function(x, eps = 0) {
-  x <- pmax(x, 0 + eps)
-  x <- pmin(x, 1 - eps)
-  x
+  pmin(pmax(x, eps), 1 - eps)
 }
 
 #' Arcsin-sqrt variance-stabilising transform for proportions
@@ -103,25 +99,19 @@ arcsin_sqrt <- function(p, eps = 0) {
 #' @keywords internal
 inv_softmax <- function(x, eps = 0) {
   if (!is.numeric(x)) stop("x must be numeric.")
+  if (anyNA(x))      stop("x contains NA; please handle missing values before softmax.")
 
   softmax_vec <- function(v) {
-    if (anyNA(v)) stop("x contains NA; please handle missing values before softmax.")
-    v <- v - max(v) # numerical stability
-    ex <- exp(v)
-    out <- ex / sum(ex)
-    if (eps > 0) out <- .clamp01(out, eps = eps)
-    out
+    e <- exp(v - max(v))            # max-shift for numerical stability
+    out <- e / sum(e)
+    if (eps > 0) .clamp01(out, eps = eps) else out
   }
 
   if (is.matrix(x)) {
     out <- t(apply(x, 1, softmax_vec))
     dimnames(out) <- dimnames(x)
-    return(out)
+    out
+  } else {
+    softmax_vec(as.numeric(x))
   }
-
-  if (is.vector(x)) {
-    return(softmax_vec(as.numeric(x)))
-  }
-
-  stop("x must be a numeric vector or matrix.")
 }

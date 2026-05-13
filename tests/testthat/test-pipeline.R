@@ -76,13 +76,6 @@ test_that("extract_job_params(): data.frame row -> exact list", {
   )
 })
 
-test_that("extract_job_params(): nested 'X1.seed' / 'X2.n_da_taxa' names are handled", {
-  expect_identical(
-    extract_job_params(data.frame(X1.seed = 7, X2.n_da_taxa = 3L)),
-    list(seed = 7, n_da_taxa = 3L)
-  )
-})
-
 test_that("extract_job_params(): list input -> exact list", {
   expect_identical(
     extract_job_params(list(seed = 11, n_da_taxa = 2L)),

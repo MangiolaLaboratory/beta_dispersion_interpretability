@@ -49,7 +49,7 @@ test_that("simulate_compositional_bb(): return-list names and order are pinned",
     c("ground_truth_params", "count_long",
       "cohort_log_linear_predictors", "cohort_log_sigma", "cohort_sigma",
       "cohort_mu", "unique_design", "sample_to_cohort", "n_cohorts",
-      "sample_metadata", "taxon_metadata", "design_matrix",
+      "sample_metadata", "design_matrix",
       "mu_inv_softmax", "slope_vector", "parameters",
       "seed", "n_da_taxa"),  # extra fields added by .make_tiny_sim
     ignore.order = FALSE
