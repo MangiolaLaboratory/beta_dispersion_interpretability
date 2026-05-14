@@ -2,9 +2,6 @@
 # R/alpha_diversity.R - Alpha diversity analysis and plotting
 # =============================================================================
 #
-# Source this via the top-level functions.R, which sources all R/*.R modules
-# in the correct dependency order.
-#
 # Dependencies (see @importFrom on each function):
 #   dplyr                 - group_by, summarise, mutate, select, first, n
 #   tidyr                 - pivot_wider
@@ -170,7 +167,7 @@
 #'   \code{plot} (see \code{\link{.alpha_diversity_table_to_plot}}).
 #'
 #' @seealso \code{\link{run_alpha_diversity_analysis_normalised}}.
-#' @keywords internal
+#' @export
 #' @importFrom dplyr group_by summarise mutate
 run_alpha_diversity_analysis <- function(
   sim_result,
@@ -252,7 +249,7 @@ run_alpha_diversity_analysis <- function(
 #'   plot subtitle now states the rarefaction settings.
 #'
 #' @seealso \code{\link{run_alpha_diversity_analysis}}.
-#' @keywords internal
+#' @export
 #' @importFrom dplyr select group_by summarise first
 #' @importFrom tidyr pivot_wider
 #' @importFrom tibble tibble

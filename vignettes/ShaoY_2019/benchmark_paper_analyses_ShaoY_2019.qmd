@@ -1,6 +1,6 @@
 ---
-title: "Beta-diversity benchmark — Brito et al. (IL 2016; body site)"
-subtitle: "PERMDISP (`vegan::betadisper`) distances; stool vs oral cavity"
+title: "Beta-diversity benchmark — Shao et al. (2019; mother–infant)"
+subtitle: "PERMDISP (`vegan::betadisper`) distances; mother vs child stool"
 author: "Mangiola Laboratory"
 date: today
 format:
@@ -15,7 +15,7 @@ format:
 execute:
   warning: false
   message: false
-  fig.path: "britoil_2016_paper_figures/"
+  fig.path: "ShaoY_2019_paper_figures/"
 ---
 
 > **Memory requirement:** Rendering this report can require about **40 GB of RAM**.
@@ -107,10 +107,10 @@ library(sccomp)
 library(ggrepel)
 library(lme4)
 
-source("functions.R")
+library(betaDispersionInterpretability)
 
 knitr::opts_chunk$set(
-  fig.path = "britoil_2016_paper_figures/",
+  fig.path = "ShaoY_2019_paper_figures/",
   dpi = 220
 )
 
@@ -147,6 +147,12 @@ theme_multipanel <-
 dropLeadingZero <- function(l) {
   stringr::str_replace(l, '0(?=\\.)', '')
 }
+
+# PuOr palette: mother (purple) vs child / infant stool (orange).
+cols_prgn_base <- c(
+  "mother" = RColorBrewer::brewer.pal(11, "PuOr")[2],
+  "child" = RColorBrewer::brewer.pal(11, "PuOr")[10]
+)
 
 # Helper function to format axis labels: exactly 2 significant digits
 # Examples: 25, 2.1, 0.2, 0.05
@@ -220,10 +226,7 @@ plot_betadisper_pcoa_and_boxplot <- function(
   hull = TRUE,
   segments = TRUE,
   label = TRUE,
-  cols = c(
-    stool = RColorBrewer::brewer.pal(11, "PRGn")[10],
-    oralcavity = RColorBrewer::brewer.pal(11, "PRGn")[2]
-  ),
+  cols = cols_prgn_base,
   p_value = NULL,
   p_se = NULL,
   n_perm = NULL,
@@ -445,7 +448,7 @@ format_analysis_results_for_plotting <- function(
   analysis_results,
   case_label,
   standard_distance_methods = c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger"),
-  group_levels = c("stool", "oralcavity")
+  group_levels = c("mother", "child")
 ) {
 
   if (!is.list(analysis_results) || !"method_results" %in% names(analysis_results)) {
@@ -509,21 +512,15 @@ format_analysis_results_for_plotting <- function(
 plot_alpha_diversity_scatter <- function(sim_result, case_label = "Case") {
   # This is the same style used in the discovery report:
   # `print(alpha_1$plot)` from `run_alpha_diversity_analysis_normalised()`.
-  # BritoIL: two body sites (hardcoded for this QMD only).
+  # ShaoY_2019: mother vs child (hardcoded for this QMD only).
   alpha <- run_alpha_diversity_analysis_normalised(
     sim_result,
     case_label = case_label,
-    group_levels = c("stool", "oralcavity"),
-    group_colors = c(
-      stool = RColorBrewer::brewer.pal(11, "PRGn")[10],
-      oralcavity = RColorBrewer::brewer.pal(11, "PRGn")[2]
-    ),
+    group_levels = c("mother", "child"),
+    group_colors = cols_prgn_base,
     rarefy_niter = 50
   )
-  color_vals <- c(
-    stool = RColorBrewer::brewer.pal(11, "PRGn")[10],
-    oralcavity = RColorBrewer::brewer.pal(11, "PRGn")[2]
-  )
+  color_vals <- cols_prgn_base
   # Update plot to use theme_multipanel and remove titles/subtitles
   # Note: stat_ellipse linewidth is set in functions.R
   # Add marginal densities using ggside (fill will inherit from color scale if overridden)
@@ -550,14 +547,7 @@ plot_alpha_diversity_scatter <- function(sim_result, case_label = "Case") {
 
 # Whisker plot: 95% intervals of proportions per taxon and group,
 # with taxa ordered by overall mean abundance (descending).
-plot_mean_dispersion_scatter <- function(sim_result, case_label = "Case", cols = NULL) {
-  if (is.null(cols)) {
-    cols <- c(
-      stool = RColorBrewer::brewer.pal(11, "PRGn")[10],
-      oralcavity = RColorBrewer::brewer.pal(11, "PRGn")[2]
-    )
-  }
-
+plot_mean_dispersion_scatter <- function(sim_result, cols) {
   d <- sim_result$count_long %>%
     dplyr::mutate(proportion = count / library_size) %>%
     dplyr::group_by(group, taxon_id) %>%
@@ -593,7 +583,7 @@ plot_mean_dispersion_scatter <- function(sim_result, case_label = "Case", cols =
     )
 }
 
-# Distance input helpers live in `_targets_BritoIL_2016.R` (analysis only).
+# Distance input helpers live in `_targets_ShaoY_2019.R` (analysis only).
 
 # Method label functions
 pretty_method_label <- function(method_key) {
@@ -651,14 +641,15 @@ coerce_method_levels <- function(x) {
 # format_analysis_results_for_plotting is defined in this QMD (plotting helper function)
 ```
 
-```{r brito-sccomp-input}
+```{r ShaoY_2019-sccomp-input}
 #| cache: false
 
-# BritoIL_2016 sccomp fit derived from curatedMetagenomicData.
-# Factor of interest for this benchmark: body_site (stool vs oralcavity).
-# Following mia/OMA-style preprocessing, we keep target body sites and apply
-# prevalence+detection filtering before model fitting.
-sccomp_file_path <- "BritoIL_2016_sccomp_results.rds"
+# ShaoY_2019 sccomp fit derived from curatedMetagenomicData.
+# Factor of interest: family_role as `group` (mother vs child stool; Shao et al. 2019).
+# Confounders: delivery mode, antibiotics, sex, time since first collection; random intercept by `family`.
+# Note: `age_category` is omitted because it is collinear with `group` in this cohort.
+# Following mia/OMA-style preprocessing, we apply prevalence+detection filtering before model fitting.
+sccomp_file_path <- "ShaoY_2019_sccomp_results.rds"
 
 suppressPackageStartupMessages({
   library(curatedMetagenomicData)
@@ -671,13 +662,20 @@ suppressPackageStartupMessages({
 })
 
 tse <- curatedMetagenomicData(
-  "BritoIL_2016.relative_abundance",
+  "ShaoY_2019.relative_abundance",
   dryrun = FALSE,
   counts = TRUE
-) %$%
- `2021-03-31.BritoIL_2016.relative_abundance` |>
-  dplyr::filter(body_site %in% c("stool", "oralcavity")) |>
-  dplyr::mutate(body_site = factor(body_site, levels = c("stool", "oralcavity")))
+)[[1]] |>
+  dplyr::filter(.data$family_role %in% c("mother", "child")) |>
+  dplyr::mutate(
+    group = factor(.data$family_role, levels = c("mother", "child")),
+    gender = forcats::fct_na_value_to_level(factor(.data$gender), level = "unknown"),
+    antibiotics_current_use = forcats::fct_na_value_to_level(
+      factor(.data$antibiotics_current_use),
+      level = "unknown"
+    ),
+    born_method = factor(.data$born_method)
+  )
 
 # MIA-style feature filtering:
 # - detection threshold: at least 10 counts to call a taxon "present"
@@ -692,18 +690,44 @@ tse <- mia::subsetByPrevalent(
 )
 n_taxa_after <- nrow(tse)
 
-cat("BritoIL_2016 sccomp input prepared.\n")
-cat("Samples:", n_distinct(tse$.sample), "\n")
-cat("Taxa:", n_distinct(tse$.feature), "\n")
+cat("ShaoY_2019 sccomp input prepared.\n")
+cat("Samples:", dplyr::n_distinct(tse$.sample), "\n")
+cat("Taxa:", dplyr::n_distinct(tse$.feature), "\n")
 cat("Taxa before/after prevalence filter:", n_taxa_before, "/", n_taxa_after, "\n")
+cat("Simulator library sizes follow sccomp model_input$exposure after targets load.\n")
 print(
   tse |>
-    dplyr::distinct(.sample, body_site) |>
-    dplyr::count(body_site)
+    dplyr::distinct(.sample, group) |>
+    dplyr::count(group)
 )
+
+# Covariate balance by group (mother vs child).
+sample_covariates <- tse |>
+  dplyr::distinct(
+    .sample,
+    group,
+    born_method,
+    antibiotics_current_use,
+    gender,
+    days_from_first_collection
+  )
+
+covariates_to_check <- c(
+  "born_method",
+  "antibiotics_current_use",
+  "gender",
+  "days_from_first_collection"
+)
+for (covariate_name in covariates_to_check) {
+  cat("\n=== Confusion matrix: group x", covariate_name, "===\n")
+  cm <- table(sample_covariates$group, sample_covariates[[covariate_name]], useNA = "ifany")
+  print(cm)
+  cat("\nRow percentages (% within group):\n")
+  print(round(100 * prop.table(cm, margin = 1), 1))
+}
 ```
 
-```{r fit-sccomp-brito-if-needed}
+```{r fit-sccomp-ShaoY_2019-if-needed}
 #| cache: false
 
 if (!file.exists(sccomp_file_path)) {
@@ -716,8 +740,9 @@ if (!file.exists(sccomp_file_path)) {
   ) |>
 
   sccomp::sccomp_estimate(
-    formula_composition = ~ body_site + subject_id + age_category + gender + DNA_extraction_kit,
-    formula_variability = ~ body_site,
+    formula_composition = ~ group + born_method + antibiotics_current_use + gender +
+      days_from_first_collection + family,
+    formula_variability = ~ group,
     sample = "SampleID",
     cell_group = "FeatureID",
     abundance = "relative_abundance",
@@ -732,21 +757,7 @@ if (!file.exists(sccomp_file_path)) {
     # TEST
     exclude_priors = TRUE
   ) |>
-    sccomp_test(contrasts = c("Intercept" = "`(Intercept)`", "body_siteoralcavity"))
-  
-  fit = fit |> 
-    sccomp:::incorporate_parameters_into_sccomp_object(
-    parameters_to_load = c( 
-      "prec_intercept_1",
-      "prec_slope_1",
-      "prec_intercept_2",
-      "prec_slope_2",
-      "prec_sd",
-      "mix_p",
-      "beta",
-      "alpha"
-    ))
-  
+    sccomp_test(contrasts = c("Intercept" = "`(Intercept)`", "groupchild"))
   saveRDS(fit, sccomp_file_path)
   message("Saved sccomp fit to: ", sccomp_file_path)
 } else {
@@ -760,8 +771,8 @@ fit <- readRDS(sccomp_file_path)
 ## QC plots
 ```{r qc-plot}
 fit |>
-  sccomp_test(contrasts = "body_siteoralcavity") |>
-  sccomp_plot_intervals_2D(factor = "body_site")
+  sccomp_test(contrasts = "groupchild") |>
+  sccomp_plot_intervals_2D(factor = "group")
 ```
 
 
@@ -851,7 +862,7 @@ suppressPackageStartupMessages({
   library(vegan)
 })
 
-source("functions.R")
+library(betaDispersionInterpretability)
 
 utils::globalVariables(c(
   "parameter", "c_effect", "c_lower", "c_upper", "v_effect",
@@ -867,15 +878,14 @@ load_sccomp_result <- function(path) {
 list(
   tar_target(
     sccomp_result_file,
-    "BritoIL_2016_sccomp_results.rds",
+    "ShaoY_2019_sccomp_results.rds",
     format = "file"
   ),
-  # Simulation/analysis helpers live in functions.R; track as a file target so changing the
-  # sim algorithm invalidates downstream targets (source() alone is invisible to {targets}).
+  # Track the package version so downstream targets refire after a reinstall
+  # of betaDispersionInterpretability (library() alone is invisible to {targets}).
   tar_target(
-    functions_r,
-    "functions.R",
-    format = "file"
+    pkg_version,
+    utils::packageVersion("betaDispersionInterpretability")
   ),
   tar_target(
     sccomp_result,
@@ -884,8 +894,8 @@ list(
   tar_target(
     sccomp_params,
     {
-      functions_r
-      # Dispersion for Brito sims: taxon intercepts from v_effect (log-sigma mapping), not prec_intercept.
+      pkg_version
+      # Dispersion (Brito-style targets path): taxon intercepts from v_effect (log-sigma mapping), not prec_intercept.
       # DA/DA_sd sweeps use mean_dispersion_assoc_slope = 0; keep k_real = 0 so DO paths match.
       extract_sccomp_params_brito(sccomp_result)
     }
@@ -904,7 +914,7 @@ list(
     build_simulation_params_brito(
       sccomp_params,
       n_reps_auc = n_reps_auc,
-      group_levels = c("stool", "oralcavity")
+      group_levels = c("mother", "child")
     )
   ),
   # Setting DA_no_sd: Simulation targets (differential abundance, no sd on overdispersion)
@@ -931,7 +941,7 @@ list(
       n_samples_per_group = sim_params$n_samples_per_group,
       library_size_mean = sim_params$library_size_mean,
       library_size_sd = sim_params$library_size_sd
-    ) |> synthetic_sim_add_two_group_factor(c("stool", "oralcavity")),
+    ) |> synthetic_sim_add_two_group_factor(c("mother", "child")),
     pattern = map(sweep_setting_DA_no_sd_jobs),
     iteration = "list"
   ),
@@ -964,7 +974,7 @@ list(
       n_samples_per_group = sim_params$n_samples_per_group,
       library_size_mean = sim_params$library_size_mean,
       library_size_sd = sim_params$library_size_sd
-    ) |> synthetic_sim_add_two_group_factor(c("stool", "oralcavity")),
+    ) |> synthetic_sim_add_two_group_factor(c("mother", "child")),
     pattern = map(sweep_setting_DA_no_sd_jobs_with_threshold),
     iteration = "list"
   ),
@@ -1046,7 +1056,7 @@ list(
       n_samples_per_group = sim_params$n_samples_per_group,
       library_size_mean = sim_params$library_size_mean,
       library_size_sd = sim_params$library_size_sd
-    ) |> synthetic_sim_add_two_group_factor(c("stool", "oralcavity")),
+    ) |> synthetic_sim_add_two_group_factor(c("mother", "child")),
     pattern = map(sweep_setting_DA_sd_jobs),
     iteration = "list"
   ),
@@ -1078,7 +1088,7 @@ list(
       n_samples_per_group = sim_params$n_samples_per_group,
       library_size_mean = sim_params$library_size_mean,
       library_size_sd = sim_params$library_size_sd
-    ) |> synthetic_sim_add_two_group_factor(c("stool", "oralcavity")),
+    ) |> synthetic_sim_add_two_group_factor(c("mother", "child")),
     pattern = map(sweep_setting_DA_sd_jobs_with_threshold),
     iteration = "list"
   ),
@@ -1153,7 +1163,7 @@ list(
         n_samples_per_group = sim_params$n_samples_per_group,
         library_size_mean = sim_params$library_size_mean,
         library_size_sd = sim_params$library_size_sd
-      ) |> synthetic_sim_add_two_group_factor(c("stool", "oralcavity"))
+      ) |> synthetic_sim_add_two_group_factor(c("mother", "child"))
 
       # Apply filtering (threshold = 0.0 keeps all taxa, effectively unfiltered)
       sim_r$count_long <- filter_by_abundance_cases(sim_r$count_long, threshold = threshold)
@@ -1178,7 +1188,7 @@ list(
             count_long = sim_r$count_long,
             sample_metadata = sim_r$sample_metadata,
             distance_method = dm,
-            group_levels = c("stool", "oralcavity")
+            group_levels = c("mother", "child")
           )
         }),
         nm = paste0("permdisp_", methods)
@@ -1190,7 +1200,7 @@ list(
 
         dist_df <- data.frame(distance = bd$distances, group = bd$group)
         group_means <- tapply(dist_df$distance, dist_df$group, mean)
-        centroid_distance <- abs(group_means["oralcavity"] - group_means["stool"])
+        centroid_distance <- abs(group_means[["child"]] - group_means[["mother"]])
 
         # Centroid separation in PCoA 1-2, scaled by average group hull radius.
         sites <- as.data.frame(vegan::scores(bd, display = "sites"))
@@ -1249,28 +1259,28 @@ list(
 )
 
 
-}, script = "_targets_BritoIL_2016.R", ask=FALSE)
+}, script = "_targets_ShaoY_2019.R", ask=FALSE)
 
 # Run the targets pipeline
-targets::tar_make(script = "_targets_BritoIL_2016.R", store = "_targets_BritoIL_2016")
+targets::tar_make(script = "_targets_ShaoY_2019.R")
 ```
 
 ```{r targets-load}
 # Set up targets configuration and load basic parameters used throughout
 # Individual chunks will load their specific targets as needed
-targets_script <- file.path(getwd(), "_targets_BritoIL_2016.R")
+targets_script <- file.path(getwd(), "_targets_ShaoY_2019.R")
 if (!file.exists(targets_script)) {
   qmd_dir <- dirname(knitr::current_input(dir = TRUE))
-  targets_script <- file.path(qmd_dir, "_targets_BritoIL_2016.R")
+  targets_script <- file.path(qmd_dir, "_targets_ShaoY_2019.R")
 }
 targets::tar_config_set(script = targets_script)
-# Source helper functions from _targets_BritoIL_2016.R AFTER tar_script/tar_make.
+# Source helper functions from `_targets_ShaoY_2019.R` AFTER tar_script/tar_make.
 source(targets_script)
 
 # Load basic parameters that are used in many places
-sccomp_params <- targets::tar_read("sccomp_params", store = "_targets_BritoIL_2016")
-sim_params <- targets::tar_read("sim_params", store = "_targets_BritoIL_2016")
-abundance_thresholds <- targets::tar_read("abundance_thresholds", store = "_targets_BritoIL_2016")
+sccomp_params <- targets::tar_read("sccomp_params")
+sim_params <- targets::tar_read("sim_params")
+abundance_thresholds <- targets::tar_read("abundance_thresholds")
 # Default threshold for regular plots (use 0.005)
 abundance_threshold <- 0.005
 
@@ -1307,7 +1317,7 @@ rep_seeds_auc <- sim_params$rep_seeds_auc
 ## Shared simulation settings
 
 Simulation parameters and helper functions are now defined in the targets pipeline
-(`_targets_BritoIL_2016.R`) and loaded via the `targets-load` chunk.
+(`_targets_ShaoY_2019.R`) and loaded via the `targets-load` chunk.
 
 
 
@@ -1315,24 +1325,24 @@ Simulation parameters and helper functions are now defined in the targets pipeli
 
 ## Goal
 
-Use **realistic simulation parameters extracted from BritoIL_2016 microbiome data** (sccomp fit) to evaluate the performance of various beta-diversity methods under conditions that mirror real microbiome datasets.
+Use **realistic simulation parameters extracted from ShaoY_2019 microbiome data** (sccomp fit) to evaluate the performance of various beta-diversity methods under conditions that mirror real microbiome datasets.
 
 This approach ensures our simulation sweeps reflect:
 
-1. **Real sample and taxa counts** from BritoIL_2016
+1. **Real sample and taxa counts** from ShaoY_2019
 2. **Real mean-overdispersion association (k)** estimated from the data
 3. **Real variability around the association (σ)**
 4. **Real baseline abundance distribution** (intercept effects)
 5. **Real slope distribution** (group effects)
 
-## Extract Parameters from BritoIL_2016 sccomp Fit
+## Extract Parameters from ShaoY_2019 sccomp Fit
 
 ```{r load-sccomp-results, cache: false}
 # Load the sccomp results
 result <- readRDS(sccomp_file_path)
 
 # Identify the non-intercept coefficient name dynamically
-# (e.g. groupIBD, body_siteoralcavity, etc.).
+# (e.g. groupchild for mother reference level, etc.).
 group_parameter <- result |>
   dplyr::filter(.data$parameter != "Intercept") |>
   dplyr::distinct(.data$parameter) |>
@@ -1361,7 +1371,7 @@ if (!is.null(model_input) && is.list(model_input)) {
   n_samples_real <- 178
 }
 
-cat("=== BritoIL_2016 Dataset Characteristics ===\n")
+cat("=== ShaoY_2019 Dataset Characteristics ===\n")
 cat("Number of samples:", n_samples_real, "\n")
 cat("Number of taxa (genera):", n_taxa_real, "\n")
 ```
@@ -1451,7 +1461,7 @@ if ("c_lower" %in% names(slope_data) && "c_upper" %in% names(slope_data)) {
     pull(c_effect)
 }
 
-cat("\n=== Group Effect Distribution (Slope c_effect for IBD) ===\n")
+cat("\n=== Group Effect Distribution (Slope c_effect for child vs mother) ===\n")
 cat("All taxa:\n")
 cat("  Mean:", round(mean(slope_effects), 4), "\n")
 cat("  SD:", round(sd(slope_effects), 4), "\n")
@@ -1509,8 +1519,8 @@ cat("sigma (exp(intercept_dispersion)):", format(sigma_real, scientific = TRUE, 
 cat("\nNote: This is very low overdispersion (σ ≈ 0.006), consistent with high precision.\n")
 ```
 
-```{r additional-parameter-plots}
-#| eval: !expr Sys.info()[["sysname"]] != "Darwin"
+```{r additional-parameter-plots, eval=FALSE}
+#| eval: !expr Sys.info()[["sysname"]] == "Darwin"
 # CmdStan draw CSVs are not available locally on macOS (absolute paths from Linux cluster).
 
 # 1. Intercept c_effect in softmax scale (proportions)
@@ -1545,9 +1555,9 @@ p_intercept_softmax <- ggplot(data.frame(proportion = intercept_softmax), aes(x 
 # 2. Effect in proportion fold change using sccomp_proportional_fold_change
 prop_fold_change_data <- sccomp_proportional_fold_change(
   result,
-  formula_composition = ~ body_site,
-  from = "stool",
-  to = "oralcavity"
+  formula_composition = ~ group,
+  from = "mother",
+  to = "child"
 )
 
 prop_fold_change <- prop_fold_change_data[["proportion_fold_change"]]
@@ -1597,7 +1607,7 @@ prop_fold_change_sig <- prop_fold_change_tbl %>%
   dplyr::inner_join(significant_taxa, by = "cell_group") %>%
   dplyr::mutate(abs_fold_change = abs(proportion_fold_change))
 
-cat("\n=== Absolute Proportion Fold Change (significant body_site effects) ===\n")
+cat("\n=== Absolute Proportion Fold Change (significant mother–child effects) ===\n")
 cat("N significant taxa:", nrow(prop_fold_change_sig), "\n")
 cat("Mean:", round(mean(prop_fold_change_sig$abs_fold_change, na.rm = TRUE), 4), "\n")
 cat("SD:", round(sd(prop_fold_change_sig$abs_fold_change, na.rm = TRUE), 4), "\n")
@@ -1658,8 +1668,8 @@ p_v_effect_slope <- ggplot(data.frame(log_overdispersion = log_overdispersion_sl
   theme_multipanel
 ```
 
-```{r combined-parameter-plot, fig.width=16, fig.height=12}
-#| eval: !expr Sys.info()[["sysname"]] != "Darwin"
+```{r combined-parameter-plot, fig.width=16, fig.height=12, eval=FALSE}
+#| eval: !expr Sys.info()[["sysname"]] == "Darwin"
 
 # Combined parameter visualization
 # One row: intercept c_ and proportion, slope c_ and proportional fold, then OD intercept and slope
@@ -1698,10 +1708,10 @@ p_combined <- p_combined +
 p_combined
 ```
 
-```{r combined-parameter-plot-save-pdf}
+```{r combined-parameter-plot-save-pdf, eval=FALSE}
 #| echo: false
-#| eval: !expr Sys.info()[["sysname"]] != "Darwin"
-ggsave("Figure_1_BritoIL_2016.pdf", p_combined, width = 183, height = 183/4, units = "mm")
+#| eval: !expr Sys.info()[["sysname"]] == "Darwin"
+ggsave("Figure_1_ShaoY_2019.pdf", p_combined, width = 183, height = 183/4, units = "mm")
 ```
 
 ## Simulation Setup with Realistic Parameters
@@ -1714,7 +1724,7 @@ n_taxa <- n_taxa_real
 n_samples_per_group <- floor(n_samples_real / 2)  # Split into 2 groups
 n_groups <- 2
 n_samples <- n_samples_per_group * n_groups
-group_levels <- c("stool", "oralcavity")  # Matches simulation output (body_site)
+group_levels <- c("mother", "child")  # Matches simulation output (group)
 
 library_size_mean <- sim_params$library_size_mean
 library_size_sd <- sim_params$library_size_sd
@@ -1730,7 +1740,7 @@ set.seed(123)
 sampled_intercepts <- sample(intercept_effects, n_taxa, replace = TRUE)
 mu_inv_softmax_base_realistic <- sampled_intercepts - mean(sampled_intercepts)
 
-cat("\nRealistic baseline (sampled from HMP2 intercepts):\n")
+cat("\nRealistic baseline (sampled from ShaoY_2019 intercepts):\n")
 cat("Range: [", round(min(mu_inv_softmax_base_realistic), 3), ",", 
     round(max(mu_inv_softmax_base_realistic), 3), "]\n")
 
@@ -1747,7 +1757,7 @@ cat("intercept_dispersion:", round(intercept_disp_realistic, 4), "\n")
 cat("sigma:", round(sigma_realistic, 6), "\n")
 
 # Create realistic slope vector by directly sampling from the real distribution
-# This captures the natural pattern of group effects observed in HMP2
+# This captures the natural pattern of group effects observed in ShaoY_2019
 set.seed(123)
 slope_realistic <- sample(slope_effects, n_taxa, replace = TRUE)
 # Center to sum to zero (compositional constraint)
@@ -1757,7 +1767,7 @@ slope_realistic <- slope_realistic - mean(slope_realistic)
 stopifnot(length(mu_inv_softmax_base_realistic) == n_taxa)
 stopifnot(length(slope_realistic) == n_taxa)
 
-cat("\nRealistic slope vector (sampled from HMP2 group effects):\n")
+cat("\nRealistic slope vector (sampled from ShaoY_2019 group effects):\n")
 cat("Mean:", round(mean(slope_realistic), 4), "\n")
 cat("SD:", round(sd(slope_realistic), 4), "\n")
 cat("Range: [", round(min(slope_realistic), 3), ",", round(max(slope_realistic), 3), "]\n")
@@ -1768,12 +1778,12 @@ perm_reps_auc <- 199
 rep_seeds_auc <- 12000 + seq_len(n_reps_auc)
 ```
 
-Design matrix helpers are now defined in `_targets_BritoIL_2016.R`.
+Design matrix helpers are now defined in `_targets_ShaoY_2019.R`.
 
-Helper functions are now defined in `_targets_BritoIL_2016.R`.
+Helper functions are now defined in `_targets_ShaoY_2019.R`.
 
 ```{r simulation-function}
-# Simulation functions for sweeps now live in the targets pipeline (`_targets_BritoIL_2016.R`).
+# Simulation functions for sweeps now live in the targets pipeline (`_targets_ShaoY_2019.R`).
 # Function to create composite plot for DA taxa sweep
 plot_da_taxa_sweep_results <- function(
   fpr_data,
@@ -1871,7 +1881,7 @@ plot_pcoa_single_method <- function(analysis_result, method_key, n_da_label,
   gg <- plot_betadisper_pcoa_and_boxplot(
     bd,
     title_prefix = "",
-    cols = cols_prgn_setting5,
+    cols = cols_prgn_base,
     p_value = p_val,
     show_group_legend = FALSE,
     horizontal_box = FALSE
@@ -2015,14 +2025,14 @@ get_sweep_analysis_with_threshold <- function(sweep_res, jobs_with_threshold, se
 
 This section tests method performance when there is **differential overdispersion but NO differential abundance**. This evaluates whether methods correctly detect differential dispersion without producing false positives from composition differences.
 
-All simulations in this section use realistic BritoIL_2016-derived parameters (baseline abundances, fitted mean-OD association, realistic library sizes) with `sd_log_overdispersion = 0` (no random variation in overdispersion across taxa). The same simulation case is used throughout, with different filtering applied for different figures.
+All simulations in this section use realistic ShaoY_2019-derived parameters (baseline abundances, fitted mean-OD association, realistic library sizes) with `sd_log_overdispersion = 0` (no random variation in overdispersion across taxa). The same simulation case is used throughout, with different filtering applied for different figures.
 
 ## Figure 2: Filtered Data (0.1% abundance threshold)
 
 This figure shows method performance on filtered simulated data (taxa with mean abundance <0.1% removed) with differential overdispersion but no differential abundance.
 
 ```{r case-4.5-load-params}
-# Load BritoIL_2016 parameters for Figure 2 (Setting DO_no_sd)
+# Load ShaoY_2019 parameters for Figure 2 (Setting DO_no_sd)
 # Load the sccomp results
 result_case4_5 <- readRDS(sccomp_file_path)
 
@@ -2060,14 +2070,14 @@ gc()
 # Figure 2 is about DO (differential overdispersion), not DA
 # Row 1 uses delta DO = 0.5 from Setting DO_no_sd
 # Load required targets
-sweep_setting_DO_no_sd_jobs <- targets::tar_read("sweep_setting_DO_no_sd_jobs", store = "_targets_BritoIL_2016")
+sweep_setting_DO_no_sd_jobs <- targets::tar_read("sweep_setting_DO_no_sd_jobs")
 
 # Allow running this chunk standalone in IDE sessions where setup may be skipped.
 if (!exists("simulate_case_realistic_taxa")) {
-  targets_script_local <- file.path(getwd(), "_targets_BritoIL_2016.R")
+  targets_script_local <- file.path(getwd(), "_targets_ShaoY_2019.R")
   if (!file.exists(targets_script_local)) {
     qmd_dir_local <- dirname(knitr::current_input(dir = TRUE))
-    targets_script_local <- file.path(qmd_dir_local, "_targets_BritoIL_2016.R")
+    targets_script_local <- file.path(qmd_dir_local, "_targets_ShaoY_2019.R")
   }
   source(targets_script_local)
 }
@@ -2079,10 +2089,10 @@ if (!exists("simulate_case_realistic_taxa")) {
 # - Higher intercept_dispersion → Higher log(σ) → Higher σ → MORE overdispersion
 # - Lower intercept_dispersion → Lower log(σ) → Lower σ → LESS overdispersion
 # 
-# For differential overdispersion (IBD > non-IBD):
-# - non-IBD: intercept_dispersion = intercept_base (e.g., -6)
-# - IBD: intercept_dispersion = intercept_base + delta (e.g., -5.5)
-# - Since -5.5 > -6, IBD has HIGHER σ and MORE overdispersion ✓
+# For differential overdispersion (child > mother in this toy coding):
+# - mother: intercept_dispersion = intercept_base (e.g., -6)
+# - child: intercept_dispersion = intercept_base + delta (e.g., -5.5)
+# - Since -5.5 > -6, the second group has HIGHER σ and MORE overdispersion ✓
 #
 # Note: This is NOT precision! Precision ≈ 1/σ, so higher σ = lower precision.
 target_delta <- 0.5
@@ -2091,7 +2101,7 @@ intercept_disp_cohort <- c(intercept_base, intercept_base + target_delta)
 intercept_disp_matrix <- outer(intercept_disp_cohort, rep(1, sim_params$n_taxa))
 base_seed <- unique(sweep_setting_DO_no_sd_jobs$seed)[1]
 
-source("_targets_BritoIL_2016.R")
+source("_targets_ShaoY_2019.R")
 
 sim_realistic_taxa <- simulate_case_realistic_taxa(
   slope_vector = rep(0, sim_params$n_taxa),  # No DA
@@ -2104,7 +2114,7 @@ sim_realistic_taxa <- simulate_case_realistic_taxa(
   n_samples_per_group = sim_params$n_samples_per_group,
   library_size_mean = sim_params$library_size_mean,
   library_size_sd = sim_params$library_size_sd
-) |> synthetic_sim_add_two_group_factor(c("stool", "oralcavity"))
+) |> synthetic_sim_add_two_group_factor(c("mother", "child"))
 
 # Filter and run analysis to get full results for plotting
 # Use 0.1% threshold for Figure 2 (as stated in the text)
@@ -2180,17 +2190,12 @@ cmp_realistic_taxa_filtered <- format_analysis_results_for_plotting(
 
 ```{r figure-2-DO-sweep-data}
 # Load Setting DO_no_sd FPR data for FNR/centroid plots
-sweep_setting_DO_no_sd_fpr <- targets::tar_read("sweep_setting_DO_no_sd_fpr", store = "_targets_BritoIL_2016")
+sweep_setting_DO_no_sd_fpr <- targets::tar_read("sweep_setting_DO_no_sd_fpr")
 ```
 
 
 ```{r fig-2-components}
 # Figure 2 components (Setting DO_no_sd filtered)
-cols_prgn <- c(
-  stool = RColorBrewer::brewer.pal(11, "PRGn")[10],
-  oralcavity = RColorBrewer::brewer.pal(11, "PRGn")[2]
-)
-
 p_std_realistic_taxa_filtered <- cmp_realistic_taxa_filtered$stats %>% dplyr::filter(method == "permdisp_bray") %>% dplyr::pull(p_value)
 se_std_realistic_taxa_filtered <- cmp_realistic_taxa_filtered$stats %>% dplyr::filter(method == "permdisp_bray") %>% dplyr::pull(p_se)
 n_std_realistic_taxa_filtered <- cmp_realistic_taxa_filtered$stats %>% dplyr::filter(method == "permdisp_bray") %>% dplyr::pull(n_perm)
@@ -2198,7 +2203,7 @@ n_std_realistic_taxa_filtered <- cmp_realistic_taxa_filtered$stats %>% dplyr::fi
 std_gg_realistic_taxa_filtered <- plot_betadisper_pcoa_and_boxplot(
   cmp_realistic_taxa_filtered$bd$standard,
   "PERMDISP (Bray–Curtis)",
-  cols = cols_prgn,
+  cols = cols_prgn_base,
   p_value = p_std_realistic_taxa_filtered,
   p_se = se_std_realistic_taxa_filtered,
   n_perm = n_std_realistic_taxa_filtered,
@@ -2207,12 +2212,12 @@ std_gg_realistic_taxa_filtered <- plot_betadisper_pcoa_and_boxplot(
 )
 # Use delta = 2 simulation for alpha plot in PCoA grid
 alpha_plot_realistic_taxa_filtered <- plot_alpha_diversity_scatter(sim_realistic_taxa_filtered, case_label = "Setting DO_no_sd (filtered)") +
-  ggplot2::scale_color_manual(values = cols_prgn, guide = "none") +
-  ggplot2::scale_fill_manual(values = cols_prgn, guide = "none")
+  ggplot2::scale_color_manual(values = cols_prgn_base, guide = "none") +
+  ggplot2::scale_fill_manual(values = cols_prgn_base, guide = "none")
 
-disp_scatter_realistic_taxa_filtered <- plot_mean_dispersion_scatter(sim_realistic_taxa_filtered, case_label = "Setting DO_no_sd (filtered)", cols = cols_prgn)
+disp_scatter_realistic_taxa_filtered <- plot_mean_dispersion_scatter(sim_realistic_taxa_filtered, cols_prgn_base)
 
-# Filter distances for non-IBD methods
+# Filter distances for non-ibd distance constructions (method keys prefixed with ibd)
 distances_non_ibd_realistic_taxa_filtered <- cmp_realistic_taxa_filtered$distances_long %>%
   dplyr::mutate(method_char = as.character(method)) %>%
   dplyr::filter(!startsWith(method_char, "ibd")) %>%
@@ -2222,11 +2227,11 @@ distances_non_ibd_realistic_taxa_filtered <- cmp_realistic_taxa_filtered$distanc
     TRUE ~ "Other methods"
   ))
 
-# Create boxplot panel for all methods (excluding IBD) with facets
+# Create boxplot panel for all methods (excluding ibd-prefixed distance constructions) with facets
 p_boxplots_all_realistic_taxa_filtered <- ggplot(distances_non_ibd_realistic_taxa_filtered, aes(x = method_label, y = distance, fill = group)) +
   geom_boxplot(width = 0.5, outlier.size = 0.1, alpha = 0.85, linewidth = 0.25, outlier.stroke = 0, position = position_dodge(width = 0.8)) +
   geom_jitter(size = 1.0, alpha = 0.25, stroke = 0, position = position_jitterdodge(dodge.width = 0.8, jitter.width = 0.12)) +
-  scale_fill_manual(values = cols_prgn, name = NULL) +
+  scale_fill_manual(values = cols_prgn_base, name = NULL) +
   facet_wrap(~ method_group, nrow = 1, scales = "free", space = "free_x") +
   labs(x = NULL, y = "Distance to centroid") +
   theme_multipanel +
@@ -2234,7 +2239,7 @@ p_boxplots_all_realistic_taxa_filtered <- ggplot(distances_non_ibd_realistic_tax
     axis.text.x = element_text(angle = 45, hjust = 1, size = 6),
   )
 
-# Create PCoA plots for all methods (excluding IBD) using delta = 2 simulation (original)
+# Create PCoA plots for all methods (excluding ibd-prefixed distance constructions)
 # Diagnostic: Verify the actual delta value in the simulation and centroid distances
 # Extract parameters from simulation
 intercept_dispersion_realistic_taxa <- unique(sim_realistic_taxa$cohort_log_sigma)
@@ -2244,15 +2249,15 @@ slope_vector_realistic_taxa <- sim_realistic_taxa$slope_vector
 cat("\n=== Figure 2 Row 1: Simulation Parameters ===\n")
 cat("Simulation source: Setting DO_no_sd with delta = 0.5\n")
 cat("Simulation parameters:\n")
-cat("  intercept_dispersion (log) - non-IBD:", round(intercept_dispersion_realistic_taxa[1], 4), "\n")
-cat("  intercept_dispersion (log) - IBD:", round(intercept_dispersion_realistic_taxa[2], 4), "\n")
+cat("  intercept_dispersion (log) - mother:", round(intercept_dispersion_realistic_taxa[1], 4), "\n")
+cat("  intercept_dispersion (log) - child:", round(intercept_dispersion_realistic_taxa[2], 4), "\n")
 delta_od <- intercept_dispersion_realistic_taxa[2] - intercept_dispersion_realistic_taxa[1]
 cat("  Differential overdispersion (delta, log):", round(delta_od, 4), "\n")
 cat("  Differential overdispersion (delta, linear scale, fold change):", round(exp(delta_od), 4), "x\n")
 cat("  sd_log_overdispersion:", sd_log_overdispersion_realistic_taxa, "\n")
 cat("  slope_vector (DA):", if(all(slope_vector_realistic_taxa == 0)) "all zeros (no DA)" else "has non-zero values", "\n")
 cat("\n*** SUMMARY: Figure 2 Row 1 uses delta OD =", round(delta_od, 4), "on log (", round(exp(delta_od), 2), "x fold change) ***\n")
-cat("*** Expected: delta OD = 0.5 (non-IBD: -6, IBD: -5.5) ***\n")
+cat("*** Expected: delta OD = 0.5 (mother: -6, child: -5.5) ***\n")
 
 # Check all methods for centroid distances
 cat("\nCentroid distances across all methods:\n")
@@ -2266,8 +2271,8 @@ for (method_key in names(cmp_realistic_taxa_filtered$bd_by_method)) {
   
   method_label <- pretty_method_label_box(method_key)
   cat("\n", method_label, ":\n", sep = "")
-  cat("  non-IBD mean distance to centroid:", round(group_dists[1], 6), "\n")
-  cat("  IBD mean distance to centroid:", round(group_dists[2], 6), "\n")
+  cat("  mother mean distance to centroid:", round(group_dists[1], 6), "\n")
+  cat("  child mean distance to centroid:", round(group_dists[2], 6), "\n")
   cat("  Difference (dispersion delta):", round(group_dists[2] - group_dists[1], 6), "\n")
   
   if (nrow(centroids) == 2 && ncol(centroids) >= 2) {
@@ -2284,8 +2289,8 @@ for (method_key in names(cmp_realistic_taxa_filtered$bd_by_method)) {
     } else NULL
     
     cat("  Centroid positions (PCoA 1-2):\n")
-    cat("    non-IBD:", paste(round(centroids[1, 1:2], 6), collapse = ", "), "\n")
-    cat("    IBD:", paste(round(centroids[2, 1:2], 6), collapse = ", "), "\n")
+    cat("    mother:", paste(round(centroids[1, 1:2], 6), collapse = ", "), "\n")
+    cat("    child:", paste(round(centroids[2, 1:2], 6), collapse = ", "), "\n")
     cat("  Distance between centroids (PCoA 1-2):", round(centroid_dist_pcoa12, 8), "\n")
     cat(
       "  Centroid distance as % of mean hull radius:",
@@ -2320,7 +2325,7 @@ pcoa_plots_all_realistic_taxa_filtered <- purrr::imap(non_ibd_methods_realistic_
   gg <- plot_betadisper_pcoa_and_boxplot(
     bd,
     title_prefix = method_label,
-    cols = cols_prgn,
+    cols = cols_prgn_base,
     p_value = p_val,
     show_group_legend = FALSE,
     horizontal_box = FALSE
@@ -2567,7 +2572,7 @@ prop_breaks_whisker_realistic_taxa_all <- prop_breaks_whisker_realistic_taxa_all
 p_whisker_realistic_taxa_filtered_all <- ggplot(d_whisker_realistic_taxa_all, aes(x = taxon_id, y = mean_prop, ymin = p_low, ymax = p_high, color = group)) +
   ggplot2::geom_linerange(position = ggplot2::position_dodge(width = 0.6), linewidth = 0.5, alpha = 0.8) +
   ggplot2::geom_point(position = ggplot2::position_dodge(width = 0.6), size = 1.0, stroke = 0) +
-  ggplot2::scale_color_manual(values = cols_prgn, name = NULL) +
+  ggplot2::scale_color_manual(values = cols_prgn_base, name = NULL) +
   ggplot2::scale_y_continuous(
     trans = arcsin_sqrt_trans_realistic_taxa,
     breaks = prop_breaks_whisker_realistic_taxa_all,
@@ -2608,7 +2613,7 @@ fig_2
 
 ```{r fig-2-save-pdf}
 #| echo: false
-ggsave("Figure_2_BritoIL_2016.pdf", fig_2, width = 183, height = 138, units = "mm")
+ggsave("Figure_2_ShaoY_2019.pdf", fig_2, width = 183, height = 138, units = "mm")
 ```
 
 ```{r cleanup-after-figure-2}
@@ -2651,14 +2656,6 @@ sigma_DA_sd <- sigma_realistic
 mu_base_DA_sd <- mu_inv_softmax_base_realistic
 k_fixed_DA_sd <- 0
 
-standard_distance_methods_setting5 <- c("bray", "aitchison", "robust.aitchison", "jaccard", "hellinger")
-group_levels <- c("stool", "oralcavity")
-
-cols_prgn_setting5 <- c(
-  stool = RColorBrewer::brewer.pal(11, "PRGn")[10],
-  oralcavity = RColorBrewer::brewer.pal(11, "PRGn")[2]
-)
-
 # Whole-taxon (column) filter only: mean proportion is computed per taxon across *all* samples,
 # then taxa below the threshold are removed entirely. No per-cell or per-sample-row dropping.
 filter_by_abundance_for_plot <- function(count_long, min_abundance) {
@@ -2686,8 +2683,8 @@ seed_idx_fig3 <- 1
 ```{r setting-DA-no-sd-filtered-pcoa-plots}
 # Create PCoA panel for Setting DA_no_sd (filtered) using sweep analysis outputs
 # Use threshold = 0.001 (0.1%) for filtered plots
-sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs", store = "_targets_BritoIL_2016")
-sweep_setting_DA_no_sd_jobs_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_jobs_with_threshold", store = "_targets_BritoIL_2016")
+sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs")
+sweep_setting_DA_no_sd_jobs_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_jobs_with_threshold")
 # Use the same seed for all cases (1, 10, 40 DA) for consistency
 available_seeds <- unique(sweep_setting_DA_no_sd_jobs$seed)
 seed_fig3_pcoa <- available_seeds[min(seed_idx_fig3, length(available_seeds))]
@@ -2696,18 +2693,15 @@ threshold_filtered <- 0.001  # Use 0.1% threshold for filtered plots
 # Get analysis results for filtered (0.5% threshold) - all using the same seed
 analysis_1_raw <- targets::tar_read(
   "sweep_setting_DA_no_sd_res",
-  branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_fig3_pcoa, 1, threshold_filtered),
-  store = "_targets_BritoIL_2016"
+  branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_fig3_pcoa, 1, threshold_filtered)
 )[[1]]
 analysis_10_raw <- targets::tar_read(
   "sweep_setting_DA_no_sd_res",
-  branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_fig3_pcoa, 10, threshold_filtered),
-  store = "_targets_BritoIL_2016"
+  branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_fig3_pcoa, 10, threshold_filtered)
 )[[1]]
 analysis_40_raw <- targets::tar_read(
   "sweep_setting_DA_no_sd_res",
-  branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_fig3_pcoa, 40, threshold_filtered),
-  store = "_targets_BritoIL_2016"
+  branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_fig3_pcoa, 40, threshold_filtered)
 )[[1]]
 if (is.null(analysis_1_raw)) stop("analysis_1_raw is NULL")
 if (is.null(analysis_10_raw)) stop("analysis_10_raw is NULL")
@@ -2742,7 +2736,7 @@ invisible(gc())
 
 ```{r setting-DA-no-sd-filtered-top-panel}
 # Get FPR data for all thresholds (0.005 opaque, 0.001 lighter, 0.0 lightest)
-fpr_setting_DA_no_sd_filtered <- targets::tar_read("sweep_setting_DA_no_sd_fpr", store = "_targets_BritoIL_2016")
+fpr_setting_DA_no_sd_filtered <- targets::tar_read("sweep_setting_DA_no_sd_fpr")
 
 p_setting_DA_no_sd_filtered_fpr <- plot_da_taxa_sweep_results(
   fpr_data = fpr_setting_DA_no_sd_filtered,
@@ -2764,7 +2758,7 @@ p_setting_DA_no_sd_filtered_fpr <- plot_da_taxa_sweep_results(
 This panel uses the same filtered simulations as the first Figure 3 sweep (**Setting DA_no_sd**, `k = 0`, `sd_log_overdispersion = 0`) and evaluates **PERMANOVA true positive rate** (detection rate) when true differential abundance is present (`n_da_taxa > 0`).
 
 ```{r setting-DA-no-sd-permanova-tpr, fig.width=12, fig.height=8}
-permanova_da_tpr <- targets::tar_read("sweep_setting_DA_no_sd_permanova_tpr", store = "_targets_BritoIL_2016") %>%
+permanova_da_tpr <- targets::tar_read("sweep_setting_DA_no_sd_permanova_tpr") %>%
   dplyr::mutate(
     method_label = dplyr::case_when(
       .data$method == "permanova_bray" ~ "Bray–Curtis",
@@ -2952,10 +2946,10 @@ print(fpr_fig3 %>% dplyr::arrange(method))
 # Create plots for 40 DA case (Setting DA_no_sd) for top row of Figure 3
 # Use 40 DA simulation + analysis from sweep outputs (then filter for plotting)
 if (!exists("sweep_setting_DA_no_sd_jobs", inherits = FALSE)) {
-  sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs", store = "_targets_BritoIL_2016")
+  sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs")
 }
 if (!exists("sweep_setting_DA_no_sd_jobs_with_threshold", inherits = FALSE)) {
-  sweep_setting_DA_no_sd_jobs_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_jobs_with_threshold", store = "_targets_BritoIL_2016")
+  sweep_setting_DA_no_sd_jobs_with_threshold <- targets::tar_read("sweep_setting_DA_no_sd_jobs_with_threshold")
 }
 # Use the same seed as PCoA plots for consistency (uses seed_idx_fig3 from figure-3-seed-selection chunk)
 available_seeds_fig3 <- unique(sweep_setting_DA_no_sd_jobs$seed)
@@ -2965,8 +2959,7 @@ threshold_fig3 <- 0.001
 idx_40_da <- get_sweep_index(sweep_setting_DA_no_sd_jobs, seed_40_da_fig3, 40)
 sim_40_da <- targets::tar_read(
   "sweep_setting_DA_no_sd_sim",
-  branches = idx_40_da,
-  store = "_targets_BritoIL_2016"
+  branches = idx_40_da
 )[[1]]
 sim_40_da_filtered <- sim_40_da
 sim_40_da_filtered$count_long <- filter_by_abundance_for_plot(
@@ -2978,8 +2971,7 @@ sim_40_da_filtered$count_long <- filter_by_abundance_for_plot(
 cmp_40_da <- format_analysis_results_for_plotting(
   analysis_results = targets::tar_read(
     "sweep_setting_DA_no_sd_res",
-    branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_40_da_fig3, 40, threshold_fig3),
-    store = "_targets_BritoIL_2016"
+    branches = get_sweep_index_with_threshold(sweep_setting_DA_no_sd_jobs_with_threshold, seed_40_da_fig3, 40, threshold_fig3)
   )[[1]],
   case_label = "Setting DA_no_sd (40 DA, filtered)"
 )
@@ -3060,7 +3052,7 @@ prop_breaks_whisker_40_da <- prop_breaks_whisker_40_da[prop_breaks_whisker_40_da
 p_whisker_40_da <- ggplot(d_whisker_40_da, aes(x = taxon_id, y = mean_prop, ymin = p_low, ymax = p_high, color = group)) +
     ggplot2::geom_linerange(position = ggplot2::position_dodge(width = 0.6), linewidth = 0.5, alpha = 0.8) +
     ggplot2::geom_point(position = ggplot2::position_dodge(width = 0.6), size = 1.0, stroke = 0) +
-  ggplot2::scale_color_manual(values = cols_prgn_setting5, name = NULL) +
+  ggplot2::scale_color_manual(values = cols_prgn_base, name = NULL) +
     ggplot2::scale_y_continuous(
     trans = arcsin_sqrt_trans_40_da,
     breaks = prop_breaks_whisker_40_da,
@@ -3081,8 +3073,8 @@ p_whisker_40_da <- ggplot(d_whisker_40_da, aes(x = taxon_id, y = mean_prop, ymin
 alpha_plot_40_da <- plot_alpha_diversity_scatter(sim_40_da_filtered, case_label = "Setting DA_no_sd (40 DA, filtered)")
 if (!is.null(alpha_plot_40_da)) {
   alpha_plot_40_da <- alpha_plot_40_da +
-    ggplot2::scale_color_manual(values = cols_prgn_setting5, guide = "none") +
-    ggplot2::scale_fill_manual(values = cols_prgn_setting5, guide = "none")
+    ggplot2::scale_color_manual(values = cols_prgn_base, guide = "none") +
+    ggplot2::scale_fill_manual(values = cols_prgn_base, guide = "none")
 } else {
   warning("alpha_plot_40_da is NULL")
 }
@@ -3100,7 +3092,7 @@ distances_non_ibd_40_da <- cmp_40_da$distances_long %>%
 p_boxplots_40_da <- ggplot(distances_non_ibd_40_da, aes(x = method_label, y = distance, fill = group)) +
   geom_boxplot(width = 0.5, outlier.size = 0.1, alpha = 0.85, linewidth = 0.25, outlier.stroke = 0, position = position_dodge(width = 0.8)) +
   geom_jitter(size = 1.0, alpha = 0.25, stroke = 0, position = position_jitterdodge(dodge.width = 0.8, jitter.width = 0.12)) +
-  scale_fill_manual(values = cols_prgn_setting5, name = NULL) +
+  scale_fill_manual(values = cols_prgn_base, name = NULL) +
   facet_wrap(~ method_group, nrow = 1, scales = "free", space = "free_x") +
   labs(x = NULL, y = "Distance to centroid") +
   theme_multipanel +
@@ -3165,7 +3157,7 @@ p_figure3
 
 ```{r figure-3-save-pdf}
 #| echo: false
-ggsave("Figure_3_BritoIL_2016.pdf", p_figure3, width = 183, height = 230, units = "mm")
+ggsave("Figure_3_ShaoY_2019.pdf", p_figure3, width = 183, height = 230, units = "mm")
 ```
 
 ```{r cleanup-after-figure-3}
@@ -3192,7 +3184,7 @@ invisible(gc())
 This setting sweeps over the number of DA taxa (0, 1, 2, 3, ...) using slopes sampled from **significant DA taxa only** (credible interval excludes 0). Uses **k = 0 (no mean-OD association)** to ensure proper FPR testing at n_da_taxa = 0; with `sd_log_overdispersion = 0`, taxa also share the same baseline OD within and across groups at the null. This tests how method performance changes as we progressively add more DA taxa, starting from no DA (FPR test) to increasing numbers of DA taxa (power test).
 
 ```{r supp-fig-3, fig.width=16, fig.height=16}
-sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs", store = "_targets_BritoIL_2016")
+sweep_setting_DA_no_sd_jobs <- targets::tar_read("sweep_setting_DA_no_sd_jobs")
 # Use available seeds (with n_reps_auc=2, we have seeds 12001 and 12002)
 available_seeds_supp <- unique(sweep_setting_DA_no_sd_jobs$seed)
 seed_1_da_supp <- available_seeds_supp[1]
@@ -3208,28 +3200,28 @@ invisible(gc())
 
 # Format analysis results for plotting
 analysis_DA_no_sd_1 <- format_analysis_results_for_plotting(
-  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_1_da, store = "_targets_BritoIL_2016")[[1]],
+  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_1_da)[[1]],
   case_label = "1 DA"
 )
 analysis_DA_no_sd_20 <- format_analysis_results_for_plotting(
-  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_20_da, store = "_targets_BritoIL_2016")[[1]],
+  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_20_da)[[1]],
   case_label = "20 DA"
 )
 analysis_DA_no_sd_40 <- format_analysis_results_for_plotting(
-  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_40_da, store = "_targets_BritoIL_2016")[[1]],
+  targets::tar_read("sweep_setting_DA_no_sd_res", branches = idx_40_da)[[1]],
   case_label = "40 DA"
 )
 
 analysis_DA_sd_1 <- format_analysis_results_for_plotting(
-  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_1_da, store = "_targets_BritoIL_2016")[[1]],
+  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_1_da)[[1]],
   case_label = "1 DA"
 )
 analysis_DA_sd_20 <- format_analysis_results_for_plotting(
-  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_20_da, store = "_targets_BritoIL_2016")[[1]],
+  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_20_da)[[1]],
   case_label = "20 DA"
 )
 analysis_DA_sd_40 <- format_analysis_results_for_plotting(
-  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_40_da, store = "_targets_BritoIL_2016")[[1]],
+  targets::tar_read("sweep_setting_DA_sd_res", branches = idx_40_da)[[1]],
   case_label = "40 DA"
 )
 
@@ -3259,9 +3251,9 @@ invisible(gc())
 if (exists("fpr_setting_DA_no_sd_filtered", inherits = FALSE)) {
   fpr_setting_DA_no_sd <- fpr_setting_DA_no_sd_filtered
 } else {
-  fpr_setting_DA_no_sd <- targets::tar_read("sweep_setting_DA_no_sd_fpr", store = "_targets_BritoIL_2016")
+  fpr_setting_DA_no_sd <- targets::tar_read("sweep_setting_DA_no_sd_fpr")
 }
-fpr_setting_DA_sd <- targets::tar_read("sweep_setting_DA_sd_fpr", store = "_targets_BritoIL_2016")
+fpr_setting_DA_sd <- targets::tar_read("sweep_setting_DA_sd_fpr")
 
 p_setting_DA_no_sd <- plot_da_taxa_sweep_results(
   fpr_data = fpr_setting_DA_no_sd,
@@ -3305,7 +3297,7 @@ fig_supp_3
 
 ```{r supp-fig-3-save-pdf}
 #| echo: false
-ggsave("Supp_Figure_3_BritoIL_2016.pdf", fig_supp_3, width = 183, height = 230, units = "mm")
+ggsave("Supp_Figure_3_ShaoY_2019.pdf", fig_supp_3, width = 183, height = 230, units = "mm")
 ```
 
 ```{r cleanup-after-supp-figure-3}
@@ -3390,12 +3382,12 @@ param_summary <- tibble::tibble(
   )
 )
 
-knitr::kable(param_summary, caption = "Summary of HMP2 parameters used for realistic simulation")
+knitr::kable(param_summary, caption = "Summary of ShaoY_2019 parameters used for realistic simulation")
 ```
 
 ## Key Findings
 
-The simulation uses parameters extracted directly from the HMP2 microbiome dataset sccomp fit.
+The simulation uses parameters extracted directly from the ShaoY_2019 microbiome dataset sccomp fit.
 
 ### Parameter Mapping (sccomp → Simulator)
 
@@ -3419,11 +3411,11 @@ This matches the biological expectation that abundant taxa tend to be more varia
 ### Additional Parameters
 
 - **Variability around k (prec_sd)**: `r round(prec_sd_real, 4)` - This adds realistic variation to the simulations.
-- **Baseline abundances**: Sampled from the real HMP2 intercept distribution.
-- **Group effects (slopes)**: Sampled from the real HMP2 IBD vs Healthy effect distribution.
+- **Baseline abundances**: Sampled from the real ShaoY_2019 intercept distribution.
+- **Group effects (slopes)**: Sampled from the real ShaoY_2019 child vs mother compositional effect distribution.
 
 4. **Baseline abundances**: Sampled from the real distribution of intercept effects, capturing the natural variation in taxa abundances.
 
-5. **Group effects**: Based on the real IBD vs Healthy effect size distribution.
+5. **Group effects**: Based on the real child vs mother effect size distribution.
 
 This approach ensures the simulation conditions reflect what we observe in real microbiome studies, providing more meaningful validation of beta-diversity distance inputs for PERMDISP.

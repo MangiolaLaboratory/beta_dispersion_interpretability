@@ -1,30 +1,11 @@
-# =============================================================================
-# tests/testthat.R - Top-level test runner
-# =============================================================================
+# Standard testthat entry point for the betaDispersionInterpretability package.
 #
-# Mirrors the layout used by R packages even though this project ships as a
-# loose script + R/ module collection rather than as an installed package:
-#
-#   tests/
-#     testthat.R              <- this file (entry point)
-#     testthat/
-#       helper-setup.R        <- shared fixtures, sourced before any test runs
-#       test-<module>.R       <- one file per R/<module>.R
-#
-# Run from the project root with either:
-#
-#   Rscript tests/testthat.R
-#
-# or, interactively:
-#
-#   testthat::test_dir(here::here("tests", "testthat"))
-#
-# =============================================================================
+# Run via:
+#   R CMD check .                # full package check (installs, then runs)
+#   Rscript -e 'devtools::test()' # in-place (no install, uses pkgload)
+#   Rscript tests/testthat.R     # after installing the package
 
 library(testthat)
+library(betaDispersionInterpretability)
 
-testthat::test_dir(
-  here::here("tests", "testthat"),
-  reporter = testthat::default_reporter(),
-  stop_on_failure = TRUE
-)
+test_check("betaDispersionInterpretability")

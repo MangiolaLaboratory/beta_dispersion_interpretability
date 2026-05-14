@@ -3,33 +3,14 @@
 # =============================================================================
 #
 # testthat auto-sources every file matching `^helper.*\\.R$` in this directory
-# before running tests. We use it to:
-#
-#   1. Locate the project root (so tests can be run from any cwd).
-#   2. Source the top-level loader so every R/*.R module is in scope.
-#   3. Define small, fast fixtures that several tests reuse.
+# before running tests. The package itself is attached by tests/testthat.R
+# (or by devtools::test() / pkgload::load_all() in dev mode), so this file
+# only defines shared fixtures.
 #
 # Keep fixtures tiny: simulation calls are CPU-bound; n_taxa = 4-6 and
 # n_samples = 20-30 are usually enough to verify shapes and constraints
 # without making the suite slow.
 # =============================================================================
-
-# Project root (works whether tests are run from the project root, the tests
-# directory, or via Rscript tests/testthat.R).
-.proj_root <- tryCatch(
-  here::here(),
-  error = function(e) {
-    # Fall back: walk up from the test file until we hit functions.R.
-    p <- normalizePath(getwd(), mustWork = FALSE)
-    while (nchar(p) > 1 && !file.exists(file.path(p, "functions.R"))) {
-      p <- dirname(p)
-    }
-    p
-  }
-)
-
-# Source the loader (which sources every R/*.R module).
-suppressMessages(source(file.path(.proj_root, "functions.R")))
 
 # ---------------------------------------------------------------------------
 # Helpers

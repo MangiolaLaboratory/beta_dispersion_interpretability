@@ -2,9 +2,6 @@
 # R/permanova.R - PERMANOVA job runner and TPR summariser
 # =============================================================================
 #
-# Source this via the top-level functions.R, which sources all R/*.R modules
-# in the correct dependency order.
-#
 # Dependencies (see @importFrom on each function):
 #   vegan   - adonis2
 #   purrr   - set_names, imap_dfr
@@ -61,7 +58,7 @@
 #'   (e.g. \code{"permanova_bray"}), \code{p_value}.
 #'
 #' @seealso \code{\link{summarise_permanova_tpr}}.
-#' @keywords internal
+#' @export
 #' @importFrom purrr set_names imap_dfr
 #' @importFrom tibble tibble
 #' @importFrom vegan adonis2
@@ -145,7 +142,7 @@ run_permanova_job <- function(
 #'   \code{n_sims}, \code{n_tp}, \code{TPR}.
 #'
 #' @seealso \code{\link{run_permanova_job}}.
-#' @keywords internal
+#' @export
 #' @importFrom dplyr filter group_by summarise if_else
 #' @importFrom rlang .data
 summarise_permanova_tpr <- function(permanova_results) {

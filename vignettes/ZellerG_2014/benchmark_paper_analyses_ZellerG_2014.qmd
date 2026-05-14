@@ -69,7 +69,7 @@ library(patchwork)
 library(stringr)
 library(sccomp)
 
-source("../functions.R")
+library(betaDispersionInterpretability)
 
 knitr::opts_chunk$set(
   fig.path = "zellerg_2014_validation_figures/",

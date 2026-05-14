@@ -1,0 +1,49 @@
+Package: betaDispersionInterpretability
+Type: Package
+Title: Benchmarks for Differential Beta-Dispersion on Compositional Data
+Version: 0.1.0
+Authors@R:
+    person(given = "Stefano",
+           family = "Mangiola",
+           email = "mangiolastefano@gmail.com",
+           role = c("aut", "cre"))
+Description: Helpers, simulators, and per-cohort benchmark pipelines for the
+    paper "Beta dispersion lacks interpretability for differential stochastic
+    dispersion analyses." Generates compositional beta-binomial count data
+    from sccomp fits and benchmarks PERMDISP (vegan::betadisper) and PERMANOVA
+    (vegan::adonis2) across Bray-Curtis, Aitchison, robust Aitchison, Jaccard,
+    and Hellinger distances under controlled differential-abundance and
+    differential-dispersion scenarios.
+URL: https://github.com/MangiolaLaboratory/beta_dispersion_interpretability
+BugReports: https://github.com/MangiolaLaboratory/beta_dispersion_interpretability/issues
+License: GPL-2
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Imports:
+    dplyr,
+    ggplot2,
+    mia,
+    purrr,
+    rlang,
+    S4Vectors,
+    sccomp,
+    stats,
+    SummarizedExperiment,
+    tibble,
+    tidyr,
+    utils,
+    vegan,
+    VGAM
+Suggests:
+    here,
+    knitr,
+    parallelly,
+    patchwork,
+    quarto,
+    rmarkdown,
+    stringr,
+    targets,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3

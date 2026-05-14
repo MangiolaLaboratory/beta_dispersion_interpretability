@@ -2,9 +2,6 @@
 # R/plot_labels.R - Pretty method labels for plots
 # =============================================================================
 #
-# Source this via the top-level functions.R, which sources all R/*.R modules
-# in the correct dependency order.
-#
 # Pure base-R utilities; no external package dependencies.
 #
 # =============================================================================
@@ -36,7 +33,7 @@
 #'
 #' @seealso \code{\link{pretty_method_label_roc}},
 #'   \code{\link{pretty_method_label_box}}.
-#' @keywords internal
+#' @export
 pretty_method_label <- function(method_key) {
   labels <- c(
     bray                      = "Bray\u2013Curtis",
@@ -64,7 +61,7 @@ pretty_method_label <- function(method_key) {
 #' @return Character scalar; same as \code{\link{pretty_method_label}}.
 #'
 #' @seealso \code{\link{pretty_method_label}}.
-#' @keywords internal
+#' @export
 pretty_method_label_roc <- function(method_key) {
   pretty_method_label(method_key)
 }
@@ -78,7 +75,7 @@ pretty_method_label_roc <- function(method_key) {
 #' @return Character scalar; same as \code{\link{pretty_method_label}}.
 #'
 #' @seealso \code{\link{pretty_method_label}}.
-#' @keywords internal
+#' @export
 pretty_method_label_box <- function(method_key) {
   pretty_method_label(method_key)
 }

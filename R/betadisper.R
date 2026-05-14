@@ -2,9 +2,6 @@
 # R/betadisper.R - betadisper input builders and permutest wrappers
 # =============================================================================
 #
-# Source this via the top-level functions.R, which sources all R/*.R modules
-# in the correct dependency order.
-#
 # Dependencies (see @importFrom on each function):
 #   vegan   - permutest, vegdist, decostand
 #   stats   - dist
@@ -35,7 +32,7 @@
 #'
 #' @seealso \code{\link{permutest_betadisper_stable}} for the adaptive
 #'   variant that keeps adding permutations until a target SE is reached.
-#' @keywords internal
+#' @export
 #' @importFrom vegan permutest
 permutest_betadisper_fixed <- function(bd, permutations = 999) {
   pt <- vegan::permutest(bd, pairwise = TRUE, permutations = permutations)
@@ -75,7 +72,7 @@ permutest_betadisper_fixed <- function(bd, permutations = 999) {
 #' }
 #'
 #' @seealso \code{\link{permutest_betadisper_fixed}}.
-#' @keywords internal
+#' @export
 #' @importFrom vegan permutest
 permutest_betadisper_stable <- function(bd, max_perm = 99999, batch = 5000, target_se = 0.0025) {
   if (max_perm  < 999) stop("max_perm must be >= 999")
@@ -141,7 +138,7 @@ permutest_betadisper_stable <- function(bd, max_perm = 99999, batch = 5000, targ
 #' }
 #'
 #' @seealso \code{\link{run_analysis_job}} for the main consumer.
-#' @keywords internal
+#' @export
 #' @importFrom dplyr select all_of
 #' @importFrom tidyr pivot_wider
 #' @importFrom tibble column_to_rownames

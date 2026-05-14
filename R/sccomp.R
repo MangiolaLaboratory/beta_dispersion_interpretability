@@ -2,9 +2,6 @@
 # R/sccomp.R - sccomp parameter extraction and simulation-param builders
 # =============================================================================
 #
-# Source this via the top-level functions.R, which sources all R/*.R modules
-# in the correct dependency order.
-#
 # Dependencies (see @importFrom on each function):
 #   stats  - sd
 #   Other inputs come from sccomp::sccomp_estimate() results (the `fit` object
@@ -45,7 +42,7 @@
 #'
 #' @seealso \code{\link{extract_sccomp_params_brito}} which can optionally
 #'   consume the values returned here.
-#' @keywords internal
+#' @export
 extract_precision_trend_params <- function(fit) {
   fit_vars <- fit$metadata()$stan_variables
 
@@ -101,7 +98,7 @@ extract_precision_trend_params <- function(fit) {
 #'
 #' @seealso \code{\link{.sim_library_size_or_default}},
 #'   \code{\link{extract_sccomp_params_brito}}.
-#' @keywords internal
+#' @export
 #' @importFrom stats sd
 library_size_from_sccomp_model_input <- function(model_input) {
   if (is.null(model_input) || is.null(model_input$exposure)) {
@@ -200,7 +197,7 @@ library_size_from_sccomp_model_input <- function(model_input) {
 #'
 #' @seealso \code{\link{build_simulation_params_brito}} which consumes this
 #'   output; \code{\link{library_size_from_sccomp_model_input}}.
-#' @keywords internal
+#' @export
 extract_sccomp_params_brito <- function(
     result,
     use_precision_trend_from_fit = FALSE,  # kept for back-compat; ignored
@@ -302,7 +299,7 @@ extract_sccomp_params_brito <- function(
 #' @seealso \code{\link{extract_sccomp_params_brito}},
 #'   \code{\link{simulate_compositional_bb}},
 #'   \code{\link{synthetic_sim_add_two_group_factor}}.
-#' @keywords internal
+#' @export
 #' @importFrom stats sd
 build_simulation_params_brito <- function(
   sccomp_params,

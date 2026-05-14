@@ -2,9 +2,6 @@
 # R/design.R - Design matrix and group-factor helpers
 # =============================================================================
 #
-# Source this via the top-level functions.R, which sources all R/*.R modules
-# in the correct dependency order.
-#
 # Pure base-R utilities; no external package dependencies.
 #
 # =============================================================================
@@ -34,7 +31,7 @@
 #'
 #' @seealso \code{\link{simulate_compositional_bb}},
 #'   \code{\link{synthetic_sim_add_two_group_factor}}.
-#' @keywords internal
+#' @export
 design_matrix_from_groups <- function(n_samples_per_group) {
   if (length(n_samples_per_group) == 1L) {
     Group <- rep(c(0L, 1L), each = n_samples_per_group)
@@ -74,7 +71,7 @@ design_matrix_from_groups <- function(n_samples_per_group) {
 #'
 #' @seealso \code{\link{design_matrix_from_groups}},
 #'   \code{\link{simulate_compositional_bb}}.
-#' @keywords internal
+#' @export
 synthetic_sim_add_two_group_factor <- function(sim_r, group_levels) {
   if (length(group_levels) != 2) {
     stop("group_levels must have length 2 (first = Group 0, second = Group 1).")

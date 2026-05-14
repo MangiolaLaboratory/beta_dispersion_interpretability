@@ -2,9 +2,6 @@
 # R/transforms.R - Basic transforms and clamping helpers
 # =============================================================================
 #
-# Source this via the top-level functions.R, which sources all R/*.R modules
-# in the correct dependency order.
-#
 # Pure base-R utilities; no external package dependencies.
 #
 # =============================================================================
@@ -28,7 +25,7 @@
 #'
 #' @seealso \code{\link{inv_softmax}} for the numerically stable variant that
 #'   also accepts vectors.
-#' @keywords internal
+#' @export
 softmax <- function(log_linear_predictors) {
   e <- exp(log_linear_predictors)
   e / rowSums(e)
@@ -65,7 +62,7 @@ softmax <- function(log_linear_predictors) {
 #'   \code{asin(sqrt(p))}.
 #'
 #' @seealso \code{\link{inv_softmax}}, the unit-interval helpers in this file.
-#' @keywords internal
+#' @export
 arcsin_sqrt <- function(p, eps = 0) {
   if (eps > 0) p <- .clamp01(p, eps = eps)
   asin(sqrt(p))
@@ -96,7 +93,7 @@ arcsin_sqrt <- function(p, eps = 0) {
 #'   \eqn{(0, 1)} that sum to 1 along each row (or in total, for vector input).
 #'
 #' @seealso \code{\link{softmax}} for the non-stabilised matrix-only variant.
-#' @keywords internal
+#' @export
 inv_softmax <- function(x, eps = 0) {
   if (!is.numeric(x)) stop("x must be numeric.")
   if (anyNA(x))      stop("x contains NA; please handle missing values before softmax.")

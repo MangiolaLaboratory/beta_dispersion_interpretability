@@ -2,9 +2,6 @@
 # R/simulation.R - Beta-binomial compositional count simulation
 # =============================================================================
 #
-# Source this via the top-level functions.R, which sources all R/*.R modules
-# in the correct dependency order.
-#
 # Dependencies (see @importFrom on each function):
 #   VGAM      - rbetabinom.ab
 #   dplyr     - left_join, select, any_of
@@ -38,7 +35,7 @@
 #'
 #' @seealso \code{\link{simulate_compositional_bb}} which uses this routine
 #'   per (sample, taxon) cell.
-#' @keywords internal
+#' @export
 simulate_beta_binomial <- function(n, mu, sigma, n_sim = 1) {
   kappa <- 1 / sigma
   VGAM::rbetabinom.ab(n = n_sim, size = n, shape1 = mu * kappa, shape2 = (1 - mu) * kappa)
@@ -122,7 +119,7 @@ simulate_beta_binomial <- function(n, mu, sigma, n_sim = 1) {
 #' @seealso \code{\link{simulate_beta_binomial}} for the per-cell draw;
 #'   \code{\link{softmax}} for the link used in step 1; the alpha-diversity
 #'   and betadisper helpers consume the returned \code{count_long}.
-#' @keywords internal
+#' @export
 #' @importFrom dplyr left_join select mutate rename any_of
 #' @importFrom purrr pmap_dbl
 #' @importFrom stats rnorm

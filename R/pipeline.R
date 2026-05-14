@@ -2,9 +2,6 @@
 # R/pipeline.R - Simulation + analysis pipeline (per-job runners and summaries)
 # =============================================================================
 #
-# Source this via the top-level functions.R, which sources all R/*.R modules
-# in the correct dependency order.
-#
 # Dependencies (see @importFrom on each function):
 #   dplyr   - group_by, summarise, filter, pull, bind_rows, n
 #   purrr   - set_names, imap, imap_dfr
@@ -53,7 +50,7 @@
 #' @seealso \code{\link{simulate_compositional_bb}},
 #'   \code{\link{design_matrix_from_groups}},
 #'   \code{\link{run_simulation_job_brito}}.
-#' @keywords internal
+#' @export
 simulate_case_realistic_taxa <- function(
   slope_vector,
   mu_inv_softmax,
@@ -110,7 +107,7 @@ simulate_case_realistic_taxa <- function(
 #'
 #' @seealso \code{\link{run_permanova_job}} which uses this to pre-filter
 #'   before computing distances.
-#' @keywords internal
+#' @export
 filter_by_abundance_cases <- function(count_long, threshold = NULL) {
   if (is.null(threshold)) threshold <- abundance_threshold
   # Per-row proportion, averaged within taxon via stats::ave(), then keep
@@ -136,7 +133,7 @@ filter_by_abundance_cases <- function(count_long, threshold = NULL) {
 #'   (integer).
 #'
 #' @seealso \code{\link{run_simulation_job_brito}}.
-#' @keywords internal
+#' @export
 extract_job_params <- function(job_row) {
   if (is.null(job_row)) stop("job_row is NULL")
   job_row <- as.data.frame(job_row)
@@ -193,8 +190,8 @@ extract_job_params <- function(job_row) {
 #'   \code{n_taxa}; baseline logits used as \code{mu_inv_softmax} (must sum
 #'   to 0; not re-centred here).
 #' @param dispersion_intercept_by_taxon Numeric scalar or length-\code{n_taxa}
-#'   vector; per-taxon dispersion intercept \eqn{c} (\code{log\sigma} at
-#'   \code{mu = 0}). Scalars are recycled.
+#'   vector; per-taxon dispersion intercept \eqn{c} (\eqn{\log\sigma} at
+#'   \eqn{\mu = 0}). Scalars are recycled.
 #' @param mean_dispersion_assoc_slope Numeric scalar; the slope \eqn{k} in
 #'   \eqn{\log\sigma = -k\,\log\mu + c}.
 #' @param slope_effects_distribution Numeric vector of empirical slope effect
@@ -217,7 +214,7 @@ extract_job_params <- function(job_row) {
 #'   \code{\link{simulate_compositional_bb}},
 #'   \code{\link{run_analysis_job}},
 #'   \code{\link{build_simulation_params_brito}}.
-#' @keywords internal
+#' @export
 run_simulation_job_brito <- function(
   job_row,
   composition_intercept_by_taxon,
@@ -324,7 +321,7 @@ run_simulation_job_brito <- function(
 #'
 #' @seealso \code{\link{lighten_sweep_analysis_result_for_fpr}},
 #'   \code{\link{summarise_fpr}}.
-#' @keywords internal
+#' @export
 #' @importFrom tibble tibble
 #' @importFrom vegan betadisper
 run_analysis_job <- function(
@@ -405,7 +402,7 @@ run_analysis_job <- function(
 #'   \code{p_value}-only entries.
 #'
 #' @seealso \code{\link{run_analysis_job}}, \code{\link{summarise_fpr}}.
-#' @keywords internal
+#' @export
 #' @importFrom purrr imap
 lighten_sweep_analysis_result_for_fpr <- function(x) {
   if (!is.list(x) || !("method_results" %in% names(x))) {
@@ -458,7 +455,7 @@ lighten_sweep_analysis_result_for_fpr <- function(x) {
 #'
 #' @seealso \code{\link{run_analysis_job}},
 #'   \code{\link{lighten_sweep_analysis_result_for_fpr}}.
-#' @keywords internal
+#' @export
 #' @importFrom dplyr group_by summarise bind_rows n
 #' @importFrom purrr imap_dfr
 #' @importFrom tibble tibble
